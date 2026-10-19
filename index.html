@@ -177,6 +177,9 @@ mark{background:color-mix(in srgb,var(--focus) 32%,transparent);color:inherit;bo
 .ghost:hover{border-color:var(--warn);color:var(--warn)}
 .autosave-hint{margin-left:auto;align-self:center;color:var(--muted);font-size:12.5px;display:inline-flex;align-items:center;gap:6px}
 .autosave-hint svg{width:14px;height:14px;color:var(--ok)}
+.savebar{margin-top:18px;border-radius:var(--r);padding:11px 14px;font-size:13px;line-height:1.5}
+.savebar.warn{background:var(--warn-soft);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
+.savebar.ok{background:var(--ok-soft);color:var(--ok);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
 
 .scrim{position:fixed;inset:0;background:rgba(10,10,12,.5);z-index:60;display:grid;place-items:center;padding:20px}
 .scrim[hidden]{display:none}
@@ -534,7 +537,7 @@ $("#sections").addEventListener("click",e=>{const b=e.target.closest(".scard[dat
 
 /* ---------- form ---------- */
 function sel(id,val,opts,ph){return `<select class="inp" id="${id}"><option value="">${ph}</option>`+opts.map(o=>`<option${o===val?' selected':''}>${esc(o)}</option>`).join("")+`</select>`;}
-function num(id,val,ph){return `<input class="inp" id="${id}" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="${esc(val)}" placeholder="${ph}">`;}
+function num(id,val,ph){return `<input class="inp" id="${id}" type="text" inputmode="decimal" autocomplete="off" value="${esc(val)}" placeholder="${ph}">`;}
 
 function openForm(row){
   const key=keyOf(row);selKey=key;
@@ -578,10 +581,11 @@ function openForm(row){
     <div class="grid"><div class="wide"><textarea class="inp" id="CM_comments" rows="3" placeholder="Optional notes&hellip;">${esc(rec.comments)}</textarea></div></div>
   </details>`;
 
-  html+=`<div class="formfoot">
+  html+=`<div class="savebar" id="saveState" hidden></div>
+  <div class="formfoot">
     <button type="button" class="ghost" id="btnClear">Clear</button>
     <button type="button" class="btn" id="btnClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>Close</button>
-    <span class="autosave-hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Changes are saved automatically</span>
+    <span class="autosave-hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Saved automatically once all fields are complete</span>
   </div>`;
 
   f.innerHTML=html;wireForm(key,rec);renderSections();f.scrollIntoView({block:"start",behavior:"smooth"});
@@ -593,8 +597,19 @@ function segHtml(id,lead,val){return `<div class="seg" id="${id}" data-val="${es
 
 function wireForm(key,rec){
   let t;
-  const flush=()=>{renderSections();if(cloudOn())cloudPush(key);};
-  const save=()=>{if(!rec.timestamp){rec.timestamp=new Date().toISOString();const el=$("#recTs");if(el)el.textContent=formatTs(rec.timestamp);}persist();flashSaved();clearTimeout(t);t=setTimeout(flush,800);};
+  const refreshState=()=>{const el=$("#saveState");if(!el)return;
+    if(!recHasData(key)){el.hidden=true;return;}
+    const miss=missingFor(rec);el.hidden=false;
+    if(miss.length){el.className="savebar warn";
+      el.innerHTML='<b>Not saved to the record yet.</b> Complete every field in each block you have started &mdash; '+
+        miss.map(x=>esc(x.block)+" ("+x.fields.map(esc).join(", ")+")").join("; ")+".";}
+    else{el.className="savebar ok";el.innerHTML='<b>Saved.</b> All fields are complete'+(cloudOn()?" and recorded.":".");}};
+  const flush=()=>{renderSections();
+    if(!cloudOn())return;
+    if(!recHasData(key)){setCloudStatus("syncing");cloudDeleteRaw(key).then(ok=>setCloudStatus(ok?"ok":"error"));}
+    else if(missingFor(rec).length===0){setCloudStatus("syncing");cloudPushRaw(key).then(ok=>setCloudStatus(ok?"ok":"error"));}
+    else{setCloudStatus("draft");cloudDeleteRaw(key);}};
+  const save=()=>{if(!rec.timestamp){rec.timestamp=new Date().toISOString();const el=$("#recTs");if(el)el.textContent=formatTs(rec.timestamp);}persist();refreshState();clearTimeout(t);t=setTimeout(flush,800);};
   const toolOpts=ASSESSMENT_TOOLS.map(t=>({value:t,_search:t.toLowerCase()}));
   for(const b of BLOCKS){
     const inp=$("#"+b.key+"_tool"),pop=$("#"+b.key+"_toolpop");
@@ -605,13 +620,15 @@ function wireForm(key,rec){
     for(const fld of ["week","weight","aa","bb","f","moderation"]){
       const el=$("#"+b.key+"_"+fld);
       const isNum=fld==="weight"||fld==="aa"||fld==="bb"||fld==="f";
-      const h=()=>{if(isNum&&el.value!==""){const n=parseFloat(el.value);if(!isNaN(n)){if(n>100)el.value="100";else if(n<0)el.value="0";}}
+      const h=()=>{if(isNum){let v=el.value.replace(/[^0-9.]/g,"");const dot=v.indexOf(".");if(dot>=0)v=v.slice(0,dot+1)+v.slice(dot+1).replace(/\./g,"");
+        if(v!==""){const n=parseFloat(v);if(!isNaN(n)){if(n>100)v="100";else if(n<0)v="0";}}
+        if(v!==el.value)el.value=v;}
         rec.blocks[b.key][fld]=el.value;save();};
       el.addEventListener("input",h);el.addEventListener("change",h);
     }
   }
   $("#CM_comments").addEventListener("input",e=>{rec.comments=e.target.value;save();});
-  $("#btnClear").addEventListener("click",()=>{store[key]=blankRec();persist();if(cloudOn())cloudPush(key);toast("Cleared");openForm(curCourse.rows.find(r=>keyOf(r)===key));});
+  $("#btnClear").addEventListener("click",()=>{delete store[key];persist();if(cloudOn()){setCloudStatus("syncing");cloudDeleteRaw(key).then(ok=>setCloudStatus(ok?"ok":"error"));}toast("Cleared");openForm(curCourse.rows.find(r=>keyOf(r)===key));});
   $("#btnClose").addEventListener("click",()=>{
     const miss=missingFor(rec);
     if(miss.length){
@@ -625,6 +642,7 @@ function wireForm(key,rec){
       $("#doneScrim").hidden=false;try{window.close();}catch(e){}
     }
   });
+  refreshState();
 }
 function wireSeg(id,cb){const seg=$("#"+id);seg.addEventListener("click",e=>{const btn=e.target.closest("button[data-v]");if(!btn)return;
   const nv=seg.dataset.val===btn.dataset.v?"":btn.dataset.v;seg.dataset.val=nv;
@@ -685,7 +703,7 @@ function cloudUrl(){if(CLOUD_URL)return CLOUD_URL;try{return localStorage.getIte
 function cloudOn(){return !!cloudUrl();}
 function setCloudStatus(s){const c=$("#cloudChip");if(!c)return;
   if(!cloudOn()){c.hidden=true;return;}c.hidden=false;
-  const map={ok:["Synced","var(--ok)"],syncing:["Syncing…","var(--muted)"],error:["Sync error","var(--warn)"],on:["Cloud on","var(--muted)"]};
+  const map={ok:["Synced","var(--ok)"],syncing:["Syncing…","var(--muted)"],error:["Sync error","var(--warn)"],on:["Cloud on","var(--muted)"],draft:["Not saved","var(--warn)"]};
   const m=map[s]||map.on;c.textContent="☁ "+m[0];c.style.color=m[1];}
 function cellsFor(key){const rec=getRec(key);const meta=COURSES.find(r=>keyOf(r)===key)||{};
   const cells=[meta.campus,meta.code,meta.name,meta.instructor,key,meta.students];
@@ -693,6 +711,11 @@ function cellsFor(key){const rec=getRec(key);const meta=COURSES.find(r=>keyOf(r)
   cells.push(rec.comments);return cells;}
 async function cloudPushRaw(key){const url=cloudUrl();if(!url)return false;
   const payload={action:"upsert",token:SHEET_TOKEN,crn:String(key),headers:CSV_HEADERS,row:cellsFor(key)};
+  try{const res=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
+    try{const j=await res.json();return !!(j&&j.ok);}catch(e){return res.ok;}}
+  catch(e){try{await fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});return true;}catch(e2){return false;}}}
+async function cloudDeleteRaw(key){const url=cloudUrl();if(!url)return false;
+  const payload={action:"delete",token:SHEET_TOKEN,crn:String(key)};
   try{const res=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
     try{const j=await res.json();return !!(j&&j.ok);}catch(e){return res.ok;}}
   catch(e){try{await fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});return true;}catch(e2){return false;}}}

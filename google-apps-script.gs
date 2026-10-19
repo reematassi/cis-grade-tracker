@@ -39,17 +39,35 @@ function doPost(e) {
       return json_({ ok: false, error: 'unauthorized' });
     }
     var sh = getSheet_();
+
+    // Delete action: remove the row for this CRN entirely.
+    if (body.action === 'delete') {
+      if (sh.getLastRow() > 1) {
+        var hdr0 = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+        var cc = hdr0.indexOf('CRN') + 1; if (cc === 0) cc = 5;
+        var crnsD = sh.getRange(2, cc, sh.getLastRow() - 1, 1).getValues();
+        for (var di = crnsD.length - 1; di >= 0; di--) {
+          if (String(crnsD[di][0]) === String(body.crn)) sh.deleteRow(di + 2);
+        }
+      }
+      return json_({ ok: true, deleted: true });
+    }
+
     var headers = body.headers || [];
     var row = body.row || [];
 
-    // Write the header row once.
+    // Write the header row once (data columns + a server Timestamp column).
     if (sh.getLastRow() === 0 && headers.length) {
-      sh.appendRow(headers);
+      sh.appendRow(headers.concat(['Timestamp']));
     }
 
     var firstRow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
     var crnCol = firstRow.indexOf('CRN') + 1;
     if (crnCol === 0) crnCol = 5; // fallback: CRN is the 5th column
+
+    // The Timestamp column is set by the server and is never taken from the client.
+    var tsCol = firstRow.indexOf('Timestamp') + 1;
+    if (tsCol === 0) { tsCol = sh.getLastColumn() + 1; sh.getRange(1, tsCol).setValue('Timestamp'); }
 
     // Find an existing row for this CRN.
     var targetRow = -1;
@@ -60,12 +78,15 @@ function doPost(e) {
         if (String(crns[i][0]) === String(body.crn)) { targetRow = i + 2; break; }
       }
     }
+    var isNew = (targetRow < 0);
+    if (isNew) targetRow = sh.getLastRow() + 1;
 
-    if (targetRow > 0) {
-      sh.getRange(targetRow, 1, 1, row.length).setValues([row]);
-    } else {
-      sh.appendRow(row);
-    }
+    if (row.length) sh.getRange(targetRow, 1, 1, row.length).setValues([row]);
+
+    // Stamp the time the record was first added; keep it unchanged on later updates.
+    var existingTs = isNew ? '' : sh.getRange(targetRow, tsCol).getValue();
+    if (isNew || !existingTs) sh.getRange(targetRow, tsCol).setValue(new Date());
+
     return json_({ ok: true });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -75,11 +96,16 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  // Reading is intentionally disabled: no one can pull the data from this URL.
-  // The data lives only in the Google Sheet, which only the owner can open and download.
-  return ContentService
-    .createTextOutput('This endpoint accepts submissions only. No data is available here.')
-    .setMimeType(ContentService.MimeType.TEXT);
+  // Returns the current rows so the app can SHOW everyone what has been entered.
+  // There is no download button in the app; the full file is downloaded only from this
+  // Google Sheet, which only the owner can open.
+  try {
+    var sh = getSheet_();
+    var values = sh.getLastRow() ? sh.getDataRange().getValues() : [];
+    return json_({ ok: true, values: values });
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  }
 }
 
 function json_(obj) {
