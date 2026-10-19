@@ -175,6 +175,8 @@ mark{background:color-mix(in srgb,var(--focus) 32%,transparent);color:inherit;bo
 .formfoot{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
 .ghost{background:transparent;border:1px solid var(--line-2);color:var(--muted);border-radius:var(--r-sm);padding:8px 13px}
 .ghost:hover{border-color:var(--warn);color:var(--warn)}
+.autosave-hint{margin-left:auto;align-self:center;color:var(--muted);font-size:12.5px;display:inline-flex;align-items:center;gap:6px}
+.autosave-hint svg{width:14px;height:14px;color:var(--ok)}
 
 .scrim{position:fixed;inset:0;background:rgba(10,10,12,.5);z-index:60;display:grid;place-items:center;padding:20px}
 .scrim[hidden]{display:none}
@@ -366,6 +368,13 @@ mark{background:color-mix(in srgb,var(--focus) 32%,transparent);color:inherit;bo
     </div>
   </div>
 </div>
+<div class="scrim" id="doneScrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="doneTitle" style="width:min(460px,100%)">
+    <header><h3 id="doneTitle"></h3><button class="close" id="doneClose" aria-label="Close">&times;</button></header>
+    <div class="body" id="doneBody"></div>
+    <div class="mfoot"><button class="btn primary" id="doneOk" style="margin-left:auto">OK</button></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -387,7 +396,7 @@ const ASSESSMENT_TOOLS = [
 ].sort((a,b)=>a.localeCompare(b));
 const WEEKS = Array.from({length:16},(_,i)=>"Week"+String(i+1).padStart(2,"0"));
 const APPROVAL = ["Approved","Not Approved"];
-const MODERATION = ["Yes","No"];
+const MODERATION = ["Yes","No","Not Required"];
 const BLOCKS = [
   {key:"CW1",label:"Coursework 1",col:"CW1"},
   {key:"CW2",label:"Coursework 2",col:"CW2"},
@@ -396,6 +405,13 @@ const BLOCKS = [
   {key:"FG", label:"Final Grade",col:"Final Grade",fg:true}
 ];
 const FIELDS = ["tool","week","weight","aa","bb","f","moderation","apc","ed"];
+const UIFIELDS = ["tool","week","weight","aa","bb","f","moderation"];
+const FLABEL = {tool:"Assessment tool",week:"Week",weight:"Weight",aa:"% A / A-",bb:"% B+ / B / B-",f:"% F",moderation:"Post-moderation done"};
+function formatTs(v){if(!v)return "—";const d=new Date(v);if(isNaN(d.getTime()))return String(v);
+  try{return d.toLocaleString(undefined,{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch(e){return String(v);}}
+function blockStarted(d){return UIFIELDS.some(k=>d&&d[k]!=="" && d[k]!=null);}
+function missingFor(rec){const m=[];for(const b of BLOCKS){const d=rec.blocks[b.key]||{};
+  if(blockStarted(d)){const g=UIFIELDS.filter(k=>!d[k]);if(g.length)m.push({block:b.label,fields:g.map(k=>FLABEL[k])});}}return m;}
 
 /* ---------- indexes ---------- */
 const COURSE_MAP = new Map();
@@ -422,7 +438,7 @@ let store={};
 try{store=JSON.parse(localStorage.getItem(STORE_KEY))||{};}catch(e){store={};}
 function persist(){try{localStorage.setItem(STORE_KEY,JSON.stringify(store));}catch(e){}}
 function emptyBlock(){return {tool:"",week:"",weight:"",aa:"",bb:"",f:"",moderation:"",apc:"",ed:""};}
-function blankRec(){const rec={blocks:{},comments:""};for(const b of BLOCKS)rec.blocks[b.key]=emptyBlock();return rec;}
+function blankRec(){const rec={blocks:{},comments:"",timestamp:""};for(const b of BLOCKS)rec.blocks[b.key]=emptyBlock();return rec;}
 function getRec(key){
   if(!store[key])store[key]=blankRec();
   const rec=store[key];
@@ -431,6 +447,7 @@ function getRec(key){
   if(rec.fg){rec.blocks.FG=Object.assign(emptyBlock(),rec.blocks.FG||{},{aa:rec.fg.aa||"",f:rec.fg.f||"",apc:rec.fg.apc||"",ed:rec.fg.ed||""});delete rec.fg;}
   for(const b of BLOCKS)rec.blocks[b.key]=Object.assign(emptyBlock(),rec.blocks[b.key]||{});
   if(typeof rec.comments!=="string")rec.comments="";
+  if(typeof rec.timestamp!=="string")rec.timestamp="";
   return rec;
 }
 function recHasData(key){
@@ -528,7 +545,7 @@ function openForm(row){
   let html=`<div class="formhead"><div>
     <div class="crumb"><span class="code">${esc(course.code)}</span><span>&rsaquo;</span><span>${esc(course.name)}</span></div>
     <h2>CRN <span class="mono">${esc(row.crn)}</span></h2>
-    <div class="meta"><span>Campus <b>${esc(row.campus||"—")}</b></span><span>Instructor <b>${esc(row.instructor||"—")}</b></span><span>Enrolled <b>${row.students!=null?esc(row.students):"—"}</b></span></div>
+    <div class="meta"><span>Campus <b>${esc(row.campus||"—")}</b></span><span>Instructor <b>${esc(row.instructor||"—")}</b></span><span>Enrolled <b>${row.students!=null?esc(row.students):"—"}</b></span><span>Recorded <b id="recTs">${esc(formatTs(rec.timestamp))}</b></span></div>
   </div></div>`;
 
   for(const b of BLOCKS){
@@ -563,6 +580,8 @@ function openForm(row){
 
   html+=`<div class="formfoot">
     <button type="button" class="ghost" id="btnClear">Clear</button>
+    <button type="button" class="btn" id="btnClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>Close</button>
+    <span class="autosave-hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Changes are saved automatically</span>
   </div>`;
 
   f.innerHTML=html;wireForm(key,rec);renderSections();f.scrollIntoView({block:"start",behavior:"smooth"});
@@ -575,7 +594,7 @@ function segHtml(id,lead,val){return `<div class="seg" id="${id}" data-val="${es
 function wireForm(key,rec){
   let t;
   const flush=()=>{renderSections();if(cloudOn())cloudPush(key);};
-  const save=()=>{persist();flashSaved();clearTimeout(t);t=setTimeout(flush,800);};
+  const save=()=>{if(!rec.timestamp){rec.timestamp=new Date().toISOString();const el=$("#recTs");if(el)el.textContent=formatTs(rec.timestamp);}persist();flashSaved();clearTimeout(t);t=setTimeout(flush,800);};
   const toolOpts=ASSESSMENT_TOOLS.map(t=>({value:t,_search:t.toLowerCase()}));
   for(const b of BLOCKS){
     const inp=$("#"+b.key+"_tool"),pop=$("#"+b.key+"_toolpop");
@@ -585,12 +604,27 @@ function wireForm(key,rec){
     inp.addEventListener("input",()=>{rec.blocks[b.key].tool=inp.value;updateSummary(b.key,inp.value);save();});
     for(const fld of ["week","weight","aa","bb","f","moderation"]){
       const el=$("#"+b.key+"_"+fld);
-      const h=()=>{rec.blocks[b.key][fld]=el.value;save();};
+      const isNum=fld==="weight"||fld==="aa"||fld==="bb"||fld==="f";
+      const h=()=>{if(isNum&&el.value!==""){const n=parseFloat(el.value);if(!isNaN(n)){if(n>100)el.value="100";else if(n<0)el.value="0";}}
+        rec.blocks[b.key][fld]=el.value;save();};
       el.addEventListener("input",h);el.addEventListener("change",h);
     }
   }
   $("#CM_comments").addEventListener("input",e=>{rec.comments=e.target.value;save();});
   $("#btnClear").addEventListener("click",()=>{store[key]=blankRec();persist();if(cloudOn())cloudPush(key);toast("Cleared");openForm(curCourse.rows.find(r=>keyOf(r)===key));});
+  $("#btnClose").addEventListener("click",()=>{
+    const miss=missingFor(rec);
+    if(miss.length){
+      $("#doneTitle").textContent="Please add the missing data";
+      $("#doneBody").innerHTML='<p class="hint" style="margin:0 0 8px">Each block you have started must be complete before you finish. Missing:</p>'+
+        '<ul style="margin:0;padding-left:20px;line-height:1.7">'+miss.map(x=>`<li><b>${esc(x.block)}</b>: ${x.fields.map(esc).join(", ")}</li>`).join("")+'</ul>';
+      $("#doneScrim").hidden=false;
+    }else{
+      $("#doneTitle").textContent="All saved";
+      $("#doneBody").innerHTML='<p style="margin:0">Your data has been saved automatically. You can close this browser tab now.</p>';
+      $("#doneScrim").hidden=false;try{window.close();}catch(e){}
+    }
+  });
 }
 function wireSeg(id,cb){const seg=$("#"+id);seg.addEventListener("click",e=>{const btn=e.target.closest("button[data-v]");if(!btn)return;
   const nv=seg.dataset.val===btn.dataset.v?"":btn.dataset.v;seg.dataset.val=nv;
@@ -674,7 +708,7 @@ async function cloudLoad(){const url=cloudUrl();if(!url)return;lastCloudLoad=Dat
           b.tool=gcell(row,idx("["+label+"] Assessment Tool"));b.week=gcell(row,idx("["+label+"] Week"));b.weight=gcell(row,idx("["+label+"] Weight"));
           b.aa=gcell(row,idx("["+label+"] %A/A-"));b.bb=gcell(row,idx("["+label+"] %B+/B/B-"));b.f=gcell(row,idx("["+label+"] %F"));
           b.moderation=gcell(row,idx("["+label+"] Post moderation done"));}
-        rec.comments=gcell(row,idx("Comments"));store[crn]=rec;}
+        rec.comments=gcell(row,idx("Comments"));rec.timestamp=gcell(row,idx("Timestamp"));store[crn]=rec;}
       persist();if(curCourse)renderSections();if(selKey){const r=COURSES.find(x=>keyOf(x)===selKey);if(r)openForm(r);}}
     setCloudStatus("ok");}
   catch(e){setCloudStatus("error");}}
@@ -717,7 +751,11 @@ $("#btnHelp").addEventListener("click",openHelp);
 $("#hClose").addEventListener("click",closeHelp);
 $("#hDone").addEventListener("click",closeHelp);
 $("#helpScrim").addEventListener("mousedown",e=>{if(e.target===$("#helpScrim"))closeHelp();});
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){$("#scrim").hidden=true;closeHelp();closePw();}});
+function closeDone(){$("#doneScrim").hidden=true;}
+$("#doneClose").addEventListener("click",closeDone);
+$("#doneOk").addEventListener("click",closeDone);
+$("#doneScrim").addEventListener("mousedown",e=>{if(e.target===$("#doneScrim"))closeDone();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){$("#scrim").hidden=true;closeHelp();closePw();closeDone();}});
 
 /* ---------- theme ---------- */
 (function(){const root=document.documentElement;let saved;try{saved=localStorage.getItem("hct_theme");}catch(e){}
