@@ -19,6 +19,10 @@
 
 var SHEET_NAME = 'Data';
 
+// Shared passcode — must match SHEET_TOKEN in index.html (change both together).
+// Saves that do not carry this exact token are rejected.
+var SHARED_TOKEN = 'HCTCIS-202610-4a9f2e7c1b6d';
+
 function getSheet_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(SHEET_NAME);
@@ -31,6 +35,9 @@ function doPost(e) {
   lock.waitLock(30000);
   try {
     var body = JSON.parse(e.postData.contents);
+    if (body.token !== SHARED_TOKEN) {
+      return json_({ ok: false, error: 'unauthorized' });
+    }
     var sh = getSheet_();
     var headers = body.headers || [];
     var row = body.row || [];
@@ -68,13 +75,11 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  try {
-    var sh = getSheet_();
-    var values = sh.getLastRow() ? sh.getDataRange().getValues() : [];
-    return json_({ ok: true, values: values });
-  } catch (err) {
-    return json_({ ok: false, error: String(err) });
-  }
+  // Reading is intentionally disabled: no one can pull the data from this URL.
+  // The data lives only in the Google Sheet, which only the owner can open and download.
+  return ContentService
+    .createTextOutput('This endpoint accepts submissions only. No data is available here.')
+    .setMimeType(ContentService.MimeType.TEXT);
 }
 
 function json_(obj) {

@@ -29,11 +29,11 @@ single copy of every user's data.
   - Post-moderation done: `Yes` / `No`
 - **Automatic save** — entries save as you type (no Save button); sections with data get a
   check in the list.
-- **Password-protected export** — the first export asks you to set a password; only a hash is
-  stored. (A convenience lock, not file encryption.)
-- **Export** — CSV (columns match the CIS workbook, so rows paste straight back) or JSON.
 - **Cloud sync to a Google Sheet** — see below. Gives you one central copy of everyone's data,
   updated automatically.
+- **Only the owner can download** — the shared app has no download button, and the sheet URL is
+  write-only, so faculty enter data but cannot read or export it. You download the combined data
+  from your private Google Sheet.
 - **Built-in Help**, **light / dark theme**, responsive layout, and the **HCT logo** embedded.
 
 ## Cloud sync — one copy of all users' data (Google Sheet)
@@ -58,8 +58,19 @@ are added, existing ones updated in place).
 **Your master copy:** open the Google Sheet any time — it has every user's data.
 **File → Download** saves it as **CSV** or **Excel (.xlsx)**.
 
-> Note: the browsers only talk to *your* sheet through the URL you deploy. The URL itself grants
-> write access to that sheet, so share it only with the people who should be entering data.
+> **Who can read the data:** the app and the `/exec` URL can only *write* to the sheet — the read
+> endpoint is disabled in `google-apps-script.gs`. Faculty enter data through the app but cannot
+> download it. The full data is only in your Google Sheet, which only you can open, so only you
+> can download it.
+>
+> **Who can write:** every save carries a shared passcode. `SHEET_TOKEN` in `index.html` must
+> equal `SHARED_TOKEN` in `google-apps-script.gs`; the script rejects any save without the exact
+> token. To change the passcode, update it in **both** files (and redeploy the script). This
+> stops casual/automated writes to the URL; note the token does sit in the page source, so treat
+> it as a gate, not strong encryption.
+>
+> If you change the script, redeploy with **Manage deployments → ✏️ edit → Version: New version
+> → Deploy** so the change takes effect (the `/exec` URL stays the same).
 
 ## Installing it on GitHub
 
