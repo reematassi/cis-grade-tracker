@@ -1,45 +1,38 @@
 /**
- * CIS Grade Tracker — Google Sheet backend
+ * CIS Grade Tracker — Google Sheet backend (band-count + APC email workflow)
  *
- * This script is bound to the grade-data Google Sheet (the one that holds the "Data" tab).
- * It also reads two other files in your Drive by their IDs:
- *   - ACCESS_FILE_ID   : the registered-faculty list (email -> staff ID)
- *   - COURSES_FILE_ID  : all course sections, each tagged with the instructor's staff ID
+ * Bound to the grade-data Google Sheet (holds the "Data" tab). Reads these files by ID:
+ *   ACCESS_FILE_ID        : registered faculty  (email -> staff ID, optional name)
+ *   COURSES_FILE_ID       : course sections     (Campus, Course Code, Course Title, CRN, Num Students, ID, Program)
+ *   APC_FILE_ID           : APC per program     (Program -> APC email, optional name)
+ *   COURSE_ASSESS_FILE_ID : assessments/course  (Course Code -> assessment names)
  *
- * What it does:
- *   - Sign-in: checks an email against the access list (the list never reaches the page).
- *   - Courses: returns ONLY the courses whose ID matches the signed-in instructor.
- *   - Data: serves/saves grade rows only for signed-in faculty, limited to their own CRNs.
+ * On submit: writes one row per (CRN + Assessment) and emails the APC for that program
+ * (red = outside range -> APC for review; green = within range -> confirmation to faculty).
  *
- * Setup / redeploy:
- *   Extensions -> Apps Script -> paste this file -> Save ->
- *   Deploy -> Manage deployments -> edit -> Version: New version -> Who has access: Anyone -> Deploy.
- *
- * Optional speed-up (free): Triggers (clock icon) -> Add trigger -> function keepWarm,
- *   event source Time-driven, Minutes timer, every 5 minutes. Keeps the lists cached and warm.
+ * Redeploy after changes: Deploy -> Manage deployments -> edit -> Version: New version -> Deploy.
+ * The first email send will ask you to authorise Gmail — allow it.
+ * Optional speed-up: Triggers -> Add trigger -> keepWarm, Time-driven, every 5 minutes.
  */
 
 var SHEET_NAME = 'Data';
-
-// Shared passcode — must match SHEET_TOKEN in index.html (change both together).
 var SHARED_TOKEN = 'HCTCIS-202610-4a9f2e7c1b6d';
 
-// Registered-faculty list (file ID from its URL): email + staff ID (+ name if present).
-var ACCESS_FILE_ID = '1kZ7jXx1YLm-IOmj5JzNZ10tckUSOlLyhrGkdKpPA9BM';
+var ACCESS_FILE_ID        = '1kZ7jXx1YLm-IOmj5JzNZ10tckUSOlLyhrGkdKpPA9BM';
+var COURSES_FILE_ID       = '14l8dvhgC6_FDLeRf7mnxnc4XiarguHszFZ32vNpsiNg';
+var APC_FILE_ID           = '1SPbsAcoGsZtkuoqSVqYnGHxSi7SUbQ2gi-u0EmTAiB0';
+var COURSE_ASSESS_FILE_ID = '1RkFw-baGqzJVRipqO-IwdBM2aN_4dMDMSHNKfGlucXQ';
 
-// All courses, each row tagged with the instructor's staff ID (column heading "ID").
-var COURSES_FILE_ID = '14l8dvhgC6_FDLeRf7mnxnc4XiarguHszFZ32vNpsiNg';
+var CACHE_SECONDS = 300;
+var CAPS = { a: 25, b: 35, f: 20 };
 
-var CACHE_SECONDS = 300; // lists are cached for 5 minutes for speed
-
-/* ---------------- access list (email -> {id, name}) ---------------- */
+/* ---------------- access list ---------------- */
 function accessMap_() {
   var cache = CacheService.getScriptCache();
   var hit = cache.get('access_v2');
   if (hit) return JSON.parse(hit);
   var map = {};
-  var ss = SpreadsheetApp.openById(ACCESS_FILE_ID);
-  var sheets = ss.getSheets();
+  var sheets = SpreadsheetApp.openById(ACCESS_FILE_ID).getSheets();
   for (var s = 0; s < sheets.length; s++) {
     var v = sheets[s].getDataRange().getValues();
     if (v.length < 2) continue;
@@ -51,12 +44,11 @@ function accessMap_() {
     for (var c3 = 0; c3 < h.length; c3++) if (nc < 0 && h[c3].indexOf('name') >= 0) nc = c3;
     for (var r = 1; r < v.length; r++) {
       var em = String(v[r][ec]).trim().toLowerCase();
-      if (!em) continue;
-      map[em] = { id: ic >= 0 ? String(v[r][ic]).trim() : '', name: nc >= 0 ? String(v[r][nc]).trim() : '' };
+      if (em) map[em] = { id: ic >= 0 ? String(v[r][ic]).trim() : '', name: nc >= 0 ? String(v[r][nc]).trim() : '' };
     }
-    break; // first sheet that has an email column
+    break;
   }
-  cache.put('access_v2', JSON.stringify(map), CACHE_SECONDS);
+  try { cache.put('access_v2', JSON.stringify(map), CACHE_SECONDS); } catch (e) {}
   return map;
 }
 function findAccess_(email) {
@@ -66,25 +58,24 @@ function findAccess_(email) {
   return Object.prototype.hasOwnProperty.call(m, email) ? m[email] : null;
 }
 
-/* ---------------- courses (live, cached) ---------------- */
+/* ---------------- courses ---------------- */
 function readCourses_() {
   var cache = CacheService.getScriptCache();
-  var hit = cache.get('courses_v2');
+  var hit = cache.get('courses_v3');
   if (hit) return JSON.parse(hit);
   var out = [];
-  var ss = SpreadsheetApp.openById(COURSES_FILE_ID);
-  var sh = ss.getSheets()[0];
-  var v = sh.getDataRange().getValues();
+  var v = SpreadsheetApp.openById(COURSES_FILE_ID).getSheets()[0].getDataRange().getValues();
   if (v.length >= 2) {
     var h = v[0].map(function (x) { return String(x).trim().toLowerCase(); });
     function col(preds) { for (var c = 0; c < h.length; c++) for (var p = 0; p < preds.length; p++) if (preds[p](h[c])) return c; return -1; }
-    var campusC = col([function (x) { return x === 'campus'; }, function (x) { return x.indexOf('campus') >= 0; }]);
+    var campusC = col([function (x) { return x.indexOf('campus') >= 0; }]);
     var codeC = col([function (x) { return x.indexOf('course code') >= 0; }, function (x) { return x === 'code'; }, function (x) { return x.indexOf('code') >= 0; }]);
-    var nameC = col([function (x) { return x.indexOf('course name') >= 0; }, function (x) { return x.indexOf('course title') >= 0; }, function (x) { return x === 'name' || x === 'title'; }]);
+    var nameC = col([function (x) { return x.indexOf('title') >= 0; }, function (x) { return x.indexOf('course name') >= 0; }, function (x) { return x === 'name'; }]);
     var instrC = col([function (x) { return x.indexOf('instructor') >= 0; }, function (x) { return x.indexOf('faculty') >= 0; }, function (x) { return x.indexOf('lecturer') >= 0; }]);
     var crnC = col([function (x) { return x === 'crn'; }, function (x) { return x.indexOf('crn') >= 0; }]);
     var studC = col([function (x) { return x.indexOf('student') >= 0; }, function (x) { return x.indexOf('enroll') >= 0; }, function (x) { return x.indexOf('num') >= 0; }]);
-    var idC = col([function (x) { return x === 'id'; }, function (x) { return x.indexOf('staff id') >= 0; }, function (x) { return x.indexOf('instructor id') >= 0; }, function (x) { return x.indexOf('faculty id') >= 0; }, function (x) { return x.indexOf('id') >= 0 && x.indexOf('email') < 0; }]);
+    var progC = col([function (x) { return x.indexOf('program') >= 0; }, function (x) { return x.indexOf('programme') >= 0; }]);
+    var idC = col([function (x) { return x === 'id'; }, function (x) { return x.indexOf('staff id') >= 0; }, function (x) { return x.indexOf('instructor id') >= 0; }, function (x) { return x.indexOf('id') >= 0 && x.indexOf('email') < 0; }]);
     for (var r = 1; r < v.length; r++) {
       var crn = crnC >= 0 ? String(v[r][crnC]).trim() : '';
       if (!crn) continue;
@@ -95,17 +86,86 @@ function readCourses_() {
         instructor: instrC >= 0 ? String(v[r][instrC]).trim() : '',
         crn: crn,
         students: studC >= 0 ? v[r][studC] : '',
+        program: progC >= 0 ? String(v[r][progC]).trim() : '',
         id: idC >= 0 ? String(v[r][idC]).trim() : ''
       });
     }
   }
-  cache.put('courses_v2', JSON.stringify(out), CACHE_SECONDS);
+  try { cache.put('courses_v3', JSON.stringify(out), CACHE_SECONDS); } catch (e) {}
   return out;
 }
-function myCrnSet_(id) {
-  var set = {};
-  readCourses_().forEach(function (c) { if (String(c.id) === String(id)) set[String(c.crn)] = true; });
-  return set;
+
+/* ---------------- assessments per course ---------------- */
+function readAssessMap_() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('assess_v1');
+  if (hit) return JSON.parse(hit);
+  var map = {};
+  var v = SpreadsheetApp.openById(COURSE_ASSESS_FILE_ID).getSheets()[0].getDataRange().getValues();
+  if (v.length >= 2) {
+    var h = v[0].map(function (x) { return String(x).trim(); });
+    var hl = h.map(function (x) { return x.toLowerCase(); });
+    function find(preds) { for (var c = 0; c < hl.length; c++) for (var p = 0; p < preds.length; p++) if (preds[p](hl[c])) return c; return -1; }
+    var codeC = find([function (x) { return x.indexOf('code') >= 0; }]);
+    var assessC = find([function (x) { return x.indexOf('assessment') >= 0; }, function (x) { return x.indexOf('tool') >= 0; }, function (x) { return x === 'type'; }]);
+    var skip = {}; if (codeC >= 0) skip[codeC] = 1;
+    for (var c = 0; c < hl.length; c++) {
+      if (hl[c].indexOf('program') >= 0 || hl[c].indexOf('title') >= 0 || hl[c].indexOf('name') >= 0 ||
+          hl[c].indexOf('crn') >= 0 || hl[c].indexOf('campus') >= 0 || hl[c].indexOf('student') >= 0 ||
+          hl[c] === 'id' || hl[c].indexOf('weight') >= 0) skip[c] = 1;
+    }
+    for (var r = 1; r < v.length; r++) {
+      var code = codeC >= 0 ? String(v[r][codeC]).trim() : '';
+      if (!code) continue;
+      if (!map[code]) map[code] = [];
+      if (assessC >= 0) {
+        var a = String(v[r][assessC]).trim();
+        if (a && map[code].indexOf(a) < 0) map[code].push(a);
+      } else {
+        for (var c2 = 0; c2 < h.length; c2++) {
+          if (skip[c2]) continue;
+          var cell = String(v[r][c2]).trim();
+          if (cell && cell.toLowerCase() !== 'no' && cell !== '0' && cell.toLowerCase() !== 'false') {
+            if (map[code].indexOf(h[c2]) < 0) map[code].push(h[c2]);
+          }
+        }
+      }
+    }
+  }
+  try { cache.put('assess_v1', JSON.stringify(map), CACHE_SECONDS); } catch (e) {}
+  return map;
+}
+
+/* ---------------- APC per program ---------------- */
+function apcMap_() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('apc_v1');
+  if (hit) return JSON.parse(hit);
+  var map = {};
+  var sheets = SpreadsheetApp.openById(APC_FILE_ID).getSheets();
+  for (var s = 0; s < sheets.length; s++) {
+    var v = sheets[s].getDataRange().getValues();
+    if (v.length < 2) continue;
+    var h = v[0].map(function (x) { return String(x).trim().toLowerCase(); });
+    var pc = -1, ec = -1, nc = -1;
+    for (var c = 0; c < h.length; c++) if (pc < 0 && (h[c].indexOf('program') >= 0 || h[c].indexOf('programme') >= 0)) pc = c;
+    for (var c2 = 0; c2 < h.length; c2++) if (ec < 0 && h[c2].indexOf('email') >= 0) ec = c2;
+    for (var c3 = 0; c3 < h.length; c3++) if (nc < 0 && h[c3].indexOf('name') >= 0) nc = c3;
+    if (pc < 0 || ec < 0) continue;
+    for (var r = 1; r < v.length; r++) {
+      var pg = String(v[r][pc]).trim().toLowerCase();
+      if (pg) map[pg] = { email: String(v[r][ec]).trim(), name: nc >= 0 ? String(v[r][nc]).trim() : '' };
+    }
+    break;
+  }
+  try { cache.put('apc_v1', JSON.stringify(map), CACHE_SECONDS); } catch (e) {}
+  return map;
+}
+function apcLookup_(program) {
+  program = String(program || '').trim().toLowerCase();
+  if (!program) return null;
+  var m = apcMap_();
+  return Object.prototype.hasOwnProperty.call(m, program) ? m[program] : null;
 }
 
 /* ---------------- endpoints ---------------- */
@@ -116,12 +176,13 @@ function handleAuth_(e) {
     return json_({ ok: true, authorized: true, instructorId: acc.id, name: acc.name });
   } catch (err) { return json_({ ok: false, error: String(err) }); }
 }
-
 function handleCourses_(e) {
   try {
     var acc = findAccess_(e && e.parameter ? e.parameter.email : '');
     if (!acc) return json_({ ok: true, authorized: false });
+    var amap = readAssessMap_();
     var mine = readCourses_().filter(function (c) { return String(c.id) === String(acc.id); });
+    mine.forEach(function (c) { c.assessments = amap[c.code] || []; });
     return json_({ ok: true, authorized: true, id: acc.id, name: acc.name, courses: mine });
   } catch (err) { return json_({ ok: false, error: String(err) }); }
 }
@@ -137,24 +198,21 @@ function doGet(e) {
   var action = e && e.parameter ? e.parameter.action : '';
   if (action === 'auth') return handleAuth_(e);
   if (action === 'courses') return handleCourses_(e);
-
-  // Default: grade data — only for a signed-in faculty email, limited to their own CRNs.
   try {
     var acc = findAccess_(e && e.parameter ? e.parameter.email : '');
     if (!acc) return json_({ ok: false, error: 'unauthorized' });
     var sh = getSheet_();
     var values = sh.getLastRow() ? sh.getDataRange().getValues() : [];
     if (values.length > 1) {
-      var mine = myCrnSet_(acc.id);
-      var crnCol = values[0].indexOf('CRN'); if (crnCol < 0) crnCol = 4;
+      var mine = {};
+      readCourses_().forEach(function (c) { if (String(c.id) === String(acc.id)) mine[String(c.crn)] = true; });
+      var crnCol = values[0].indexOf('CRN'); if (crnCol < 0) crnCol = 5;
       var filtered = [values[0]];
       for (var i = 1; i < values.length; i++) if (mine[String(values[i][crnCol])]) filtered.push(values[i]);
       values = filtered;
     }
     return json_({ ok: true, values: values });
-  } catch (err) {
-    return json_({ ok: false, error: String(err) });
-  }
+  } catch (err) { return json_({ ok: false, error: String(err) }); }
 }
 
 function doPost(e) {
@@ -163,53 +221,32 @@ function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
     if (body.token !== SHARED_TOKEN) return json_({ ok: false, error: 'unauthorized' });
-    if (!findAccess_(body.email)) return json_({ ok: false, error: 'unauthorized' }); // must be signed-in faculty
+    if (!findAccess_(body.email)) return json_({ ok: false, error: 'unauthorized' });
     var sh = getSheet_();
 
-    // Delete action: remove the row for this CRN entirely.
     if (body.action === 'delete') {
-      if (sh.getLastRow() > 1) {
-        var hdr0 = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
-        var cc = hdr0.indexOf('CRN') + 1; if (cc === 0) cc = 5;
-        var crnsD = sh.getRange(2, cc, sh.getLastRow() - 1, 1).getValues();
-        for (var di = crnsD.length - 1; di >= 0; di--) {
-          if (String(crnsD[di][0]) === String(body.crn)) sh.deleteRow(di + 2);
-        }
-      }
+      removeRow_(sh, body.crn, body.assessment);
       return json_({ ok: true, deleted: true });
     }
 
+    // submit
     var headers = body.headers || [];
     var row = body.row || [];
+    if (sh.getLastRow() === 0 && headers.length) sh.appendRow(headers.concat(['Timestamp']));
 
-    if (sh.getLastRow() === 0 && headers.length) {
-      sh.appendRow(headers.concat(['Timestamp']));
-    }
+    var fr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    var crnCol = fr.indexOf('CRN');  if (crnCol < 0) crnCol = 5;
+    var asCol = fr.indexOf('Assessment'); if (asCol < 0) asCol = 8;
+    var tsCol = fr.indexOf('Timestamp');
+    if (tsCol < 0) { tsCol = sh.getLastColumn(); sh.getRange(1, tsCol + 1).setValue('Timestamp'); }
 
-    var firstRow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
-    var crnCol = firstRow.indexOf('CRN') + 1;
-    if (crnCol === 0) crnCol = 5;
+    var target = findRow_(sh, crnCol, asCol, body.crn, body.assessment);
+    if (target < 0) target = sh.getLastRow() + 1;
+    if (row.length) sh.getRange(target, 1, 1, row.length).setValues([row]);
+    sh.getRange(target, tsCol + 1).setValue(new Date()); // timestamp for every submission
 
-    var tsCol = firstRow.indexOf('Timestamp') + 1;
-    if (tsCol === 0) { tsCol = sh.getLastColumn() + 1; sh.getRange(1, tsCol).setValue('Timestamp'); }
-
-    var targetRow = -1;
-    var last = sh.getLastRow();
-    if (last > 1) {
-      var crns = sh.getRange(2, crnCol, last - 1, 1).getValues();
-      for (var i = 0; i < crns.length; i++) {
-        if (String(crns[i][0]) === String(body.crn)) { targetRow = i + 2; break; }
-      }
-    }
-    var isNew = (targetRow < 0);
-    if (isNew) targetRow = sh.getLastRow() + 1;
-
-    if (row.length) sh.getRange(targetRow, 1, 1, row.length).setValues([row]);
-
-    var existingTs = isNew ? '' : sh.getRange(targetRow, tsCol).getValue();
-    if (isNew || !existingTs) sh.getRange(targetRow, tsCol).setValue(new Date());
-
-    return json_({ ok: true });
+    var emailed = sendEmails_(body);
+    return json_({ ok: true, emailed: emailed });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
@@ -217,13 +254,81 @@ function doPost(e) {
   }
 }
 
-// Optional: run on a 5-minute time trigger to keep the lists cached and the script warm.
-function keepWarm() {
-  try { accessMap_(); readCourses_(); } catch (e) {}
+function findRow_(sh, crnCol, asCol, crn, assess) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var data = sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][crnCol]) === String(crn) && String(data[i][asCol]) === String(assess)) return i + 2;
+  }
+  return -1;
+}
+function removeRow_(sh, crn, assess) {
+  var last = sh.getLastRow();
+  if (last < 2) return;
+  var fr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  var crnCol = fr.indexOf('CRN'); if (crnCol < 0) crnCol = 5;
+  var asCol = fr.indexOf('Assessment'); if (asCol < 0) asCol = 8;
+  var data = sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
+  for (var i = data.length - 1; i >= 0; i--) {
+    if (String(data[i][crnCol]) === String(crn) && String(data[i][asCol]) === String(assess)) sh.deleteRow(i + 2);
+  }
 }
 
+/* ---------------- email ---------------- */
+function sendEmails_(body) {
+  try {
+    var H = body.headers || [], row = body.row || [];
+    function g(name) { var i = H.indexOf(name); return i >= 0 ? row[i] : ''; }
+    var red = (body.status === 'Out of range');
+    var faculty = body.email;
+    var apc = apcLookup_(body.program);
+    var code = g('Course Code'), title = g('Course Title'), crn = body.crn, assess = body.assessment;
+    var subject = (red ? '[Review needed] ' : '[Submitted] ') + code + ' CRN ' + crn + ' — ' + assess + ' grade distribution';
+    var html = emailBody_(body, apc, red);
+
+    if (red) {
+      var opts = { to: apc ? apc.email : faculty, subject: subject, htmlBody: html, name: 'CIS Grade Tracker', replyTo: faculty };
+      if (apc) opts.cc = faculty;
+      MailApp.sendEmail(opts);
+    } else {
+      var opts2 = { to: faculty, subject: subject, htmlBody: html, name: 'CIS Grade Tracker' };
+      if (apc) opts2.cc = apc.email;
+      MailApp.sendEmail(opts2);
+    }
+    return true;
+  } catch (e) { return false; }
+}
+function emailBody_(body, apc, red) {
+  var H = body.headers || [], row = body.row || [];
+  function g(name) { var i = H.indexOf(name); return i >= 0 ? row[i] : ''; }
+  var rows = [
+    ['Course', g('Course Code') + ' — ' + g('Course Title')],
+    ['CRN', body.crn], ['Program', g('Program')], ['Instructor', g('Instructor')],
+    ['Assessment', body.assessment], ['Enrolled students', g('Enrolled')],
+    ['A / A-', g('A count') + '  (' + g('A %') + ', cap ' + CAPS.a + '%)'],
+    ['B+ / B / B-', g('B+/B/B- count') + '  (' + g('B %') + ', cap ' + CAPS.b + '%)'],
+    ['F', g('F count') + '  (' + g('F %') + ', cap ' + CAPS.f + '%)'],
+    ['Post-moderation done', g('Post-moderation')],
+    ['Status', g('Status')]
+  ];
+  if (red) rows.push(['Justification', g('Justification')]);
+  var table = rows.map(function (p) {
+    return '<tr><td style="padding:4px 10px;color:#566782;white-space:nowrap">' + p[0] +
+      '</td><td style="padding:4px 10px;font-weight:600">' + String(p[1] == null ? '' : p[1]) + '</td></tr>';
+  }).join('');
+  var intro = red
+    ? 'The following grade distribution was submitted <b>outside the accepted range</b> for one or more bands and needs your review'
+      + (apc ? ' (' + apc.name + ')' : '') + '. The instructor has provided a justification below. Please review and follow up with the instructor as needed.'
+    : 'Thank you for submitting your grade distribution. All bands are <b>within the accepted range</b>. You may go ahead and post your grades in the official system.';
+  return '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#0f1b2d">' +
+    '<p>' + intro + '</p>' +
+    '<table style="border-collapse:collapse;border:1px solid #dbe5f1;border-radius:8px">' + table + '</table>' +
+    '<p style="color:#8a96a8;font-size:12px;margin-top:14px">Sent automatically by the CIS Grade Tracker.</p></div>';
+}
+
+function keepWarm() { try { accessMap_(); readCourses_(); readAssessMap_(); apcMap_(); } catch (e) {} }
+
 function json_(obj) {
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
