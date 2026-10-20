@@ -23,6 +23,44 @@ var SHEET_NAME = 'Data';
 // Saves that do not carry this exact token are rejected.
 var SHARED_TOKEN = 'HCTCIS-202610-4a9f2e7c1b6d';
 
+// Access list: the Google Sheet (file ID from its URL) that holds the registered faculty emails.
+// The app sends an email; this script checks it here, so the email list is never shown on the page.
+var ACCESS_FILE_ID = '1kZ7jXx1YLm-IOmj5JzNZ10tckUSOlLyhrGkdKpPA9BM';
+
+// Finds the first sheet/tab in the access file that has an "email" column, and returns
+// {authorized, instructorId, name} for a matching email. Columns are auto-detected by heading.
+function handleAuth_(e) {
+  try {
+    var email = String((e && e.parameter && e.parameter.email) || '').trim().toLowerCase();
+    if (!email) return json_({ ok: true, authorized: false });
+    var ss = SpreadsheetApp.openById(ACCESS_FILE_ID);
+    var sheets = ss.getSheets();
+    for (var s = 0; s < sheets.length; s++) {
+      var values = sheets[s].getDataRange().getValues();
+      if (values.length < 2) continue;
+      var hdr = values[0].map(function (h) { return String(h).trim().toLowerCase(); });
+      var emailCol = -1, idCol = -1, nameCol = -1;
+      for (var c = 0; c < hdr.length; c++) if (emailCol < 0 && hdr[c].indexOf('email') >= 0) emailCol = c;
+      if (emailCol < 0) continue;
+      for (var c2 = 0; c2 < hdr.length; c2++) if (idCol < 0 && c2 !== emailCol && hdr[c2].indexOf('id') >= 0) idCol = c2;
+      for (var c3 = 0; c3 < hdr.length; c3++) if (nameCol < 0 && hdr[c3].indexOf('name') >= 0) nameCol = c3;
+      for (var r = 1; r < values.length; r++) {
+        if (String(values[r][emailCol]).trim().toLowerCase() === email) {
+          return json_({
+            ok: true, authorized: true, email: email,
+            instructorId: idCol >= 0 ? String(values[r][idCol]).trim() : '',
+            name: nameCol >= 0 ? String(values[r][nameCol]).trim() : ''
+          });
+        }
+      }
+      return json_({ ok: true, authorized: false }); // found the email sheet, email not in it
+    }
+    return json_({ ok: false, error: 'No email column found in the access sheet' });
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  }
+}
+
 function getSheet_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(SHEET_NAME);
@@ -96,6 +134,9 @@ function doPost(e) {
 }
 
 function doGet(e) {
+  // Email sign-in check (keeps the access list private on the server).
+  if (e && e.parameter && e.parameter.action === 'auth') return handleAuth_(e);
+
   // Returns the current rows so the app can SHOW everyone what has been entered.
   // There is no download button in the app; the full file is downloaded only from this
   // Google Sheet, which only the owner can open.
