@@ -22,7 +22,7 @@ app with no code change.
 
 **Data sheet columns** (written automatically, one row per submission):
 Campus, Course Code, Course Name, CRN, Assessment, Num Students, % A band, % B band, % F band,
-Faculty Name, Faculty Email, Post-moderation, Program, APC Email, Timestamp, Status
+Faculty Name, Faculty Email, Post-moderation, Program, APC Email, APC Name, Timestamp, Status
 (*To be posted* when all within range, *Sent to APC for Approval* when any band is over). The APC
 Email is resolved on the server from the course's Program, so each record is tied to the correct
 APC. Every submission is appended as a **new row** (nothing is overwritten) — the Timestamp tracks
@@ -41,11 +41,16 @@ with the **instructor copied**.
 | **Access** `1kZ7…A9BM` | an **email** column, an **ID** (staff ID) column (name optional) | who may sign in |
 | **Courses** `14l8…siNg` | Campus, Course Code, Course Title, CRN, Num. Students, **ID**, **Program** | each person's sections |
 | **APC** `1SPbs…AiB0` | **Program**, **Email** (name optional) | who to email per program |
-| **Course-assessments** `1RkFw…ucXQ` | **Course Code** + the assessment names | the assessment dropdown per course |
+| **Course-assessments** `1RkFw…ucXQ` | **Course Code**, **Assessment** (name), **Week**, **Weight** — one row per assessment | the assessment dropdown per course |
 
 - The **ID** links Access ↔ Courses (same staff-ID values).
 - The **Program** links Courses ↔ APC (same program names).
 - The **Course Code** links Courses ↔ Course-assessments.
+
+Each assessment is shown in the dropdown as **`Assessment, Week, Weight`** (e.g. *Exam, Week04, 20%*),
+built from the three columns. A bare week number becomes `Week04`; a bare weight number gets a `%`.
+Put one assessment per row (repeat the Course Code for each). If the Courses sheet has no Program
+for a section, the Program is taken from this file instead, so the APC can still be resolved.
 
 All IDs are set at the top of `google-apps-script.gs`. Update data by **editing the same sheets**
 (don't upload new files — that changes the ID).

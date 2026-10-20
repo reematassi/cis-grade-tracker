@@ -501,9 +501,9 @@ function buildSubmit(){
   const status=red?"Sent to APC for Approval":"To be posted";
   rec.status=status;
   const H=["Campus","Course Code","Course Name","CRN","Assessment","Num Students",
-    "% A band","% B band","% F band","Faculty Name","Faculty Email","Post-moderation","Program","APC Email","Timestamp","Status"];
+    "% A band","% B band","% F band","Faculty Name","Faculty Email","Post-moderation","Program","APC Email","APC Name","Timestamp","Status"];
   const row=[r.campus||"",r.code||"",r.name||"",String(r.crn),curAssess,enr,
-    fmtp(bandPct("a")),fmtp(bandPct("b")),fmtp(bandPct("f")),(AUTH.name||""),authEmail(),(rec.moderation||""),r.program||"","","",status];
+    fmtp(bandPct("a")),fmtp(bandPct("b")),fmtp(bandPct("f")),(AUTH.name||""),authEmail(),(rec.moderation||""),r.program||"","","","",status];
   return {action:"submit",token:SHEET_TOKEN,email:authEmail(),crn:String(r.crn),assessment:curAssess,
     red:red,status:status,program:r.program||"",justification:rec.justification||"",
     courseCode:r.code||"",courseName:r.name||"",headers:H,row:row};

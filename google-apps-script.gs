@@ -96,53 +96,50 @@ function readCourses_() {
 }
 
 /* ---------------- assessments per course ---------------- */
+// Returns { assessments: {code -> ["Name, Week, Weight", ...]}, programs: {code -> program} }.
+// The assessments sheet has one row per course-assessment with separate Name / Week / Weight
+// columns; each assessment is composed into a single "Name, Week, Weight" label.
 function readAssessMap_() {
   var cache = CacheService.getScriptCache();
-  var hit = cache.get('assess_v1');
+  var hit = cache.get('assess_v2');
   if (hit) return JSON.parse(hit);
-  var map = {};
+  var map = {}, programs = {};
   var v = SpreadsheetApp.openById(COURSE_ASSESS_FILE_ID).getSheets()[0].getDataRange().getValues();
   if (v.length >= 2) {
     var h = v[0].map(function (x) { return String(x).trim(); });
     var hl = h.map(function (x) { return x.toLowerCase(); });
-    var codeC = -1;
-    for (var c = 0; c < hl.length; c++) if (codeC < 0 && hl[c].indexOf('code') >= 0) codeC = c;
-    function isMeta(x) {
-      return x.indexOf('code') >= 0 || x.indexOf('program') >= 0 || x.indexOf('title') >= 0 ||
-             x.indexOf('name') >= 0 || x.indexOf('crn') >= 0 || x.indexOf('campus') >= 0 ||
-             x.indexOf('student') >= 0 || x === 'id' || x.indexOf('weight') >= 0 || x.indexOf('email') >= 0;
-    }
+    function find(preds) { for (var c = 0; c < hl.length; c++) for (var p = 0; p < preds.length; p++) if (preds[p](hl[c])) return c; return -1; }
+    var codeC = find([function (x) { return x.indexOf('code') >= 0; }]);
+    var nameC = find([function (x) { return x.indexOf('assessment') >= 0; }, function (x) { return x.indexOf('tool') >= 0; }, function (x) { return x === 'name' || x === 'type'; }]);
+    var weekC = find([function (x) { return x.indexOf('week') >= 0; }]);
+    var wtC = find([function (x) { return x.indexOf('weight') >= 0; }, function (x) { return x.indexOf('percent') >= 0; }, function (x) { return x.indexOf('%') >= 0; }]);
+    var progC = find([function (x) { return x.indexOf('program') >= 0 || x.indexOf('programme') >= 0; }]);
     for (var r = 1; r < v.length; r++) {
       var code = codeC >= 0 ? String(v[r][codeC]).trim() : '';
       if (!code) continue;
       if (!map[code]) map[code] = [];
-      // Collect assessment names from every non-meta column in the course's row(s).
-      for (var cc = 0; cc < h.length; cc++) {
-        if (cc === codeC || isMeta(hl[cc])) continue;
-        var cell = String(v[r][cc]).trim();
-        if (!cell) continue;
-        // Each cell is ONE assessment kept intact (e.g. "Exam, Week04, Weight 20%");
-        // only split when several assessments share a cell on separate lines.
-        var parts = cell.split(/[\r\n]+/);
-        for (var pi = 0; pi < parts.length; pi++) {
-          var a = parts[pi].trim();
-          if (a && /[A-Za-z]/.test(a) && map[code].indexOf(a) < 0) map[code].push(a);
-        }
-      }
-      // Fallback: if no assessment VALUES were found, use the headings of the filled columns.
-      if (map[code].length === 0) {
-        for (var c2 = 0; c2 < h.length; c2++) {
-          if (c2 === codeC || isMeta(hl[c2])) continue;
-          var cell2 = String(v[r][c2]).trim();
-          if (cell2 && cell2.toLowerCase() !== 'no' && cell2 !== '0' && cell2.toLowerCase() !== 'false') {
-            if (/[A-Za-z]/.test(h[c2]) && map[code].indexOf(h[c2]) < 0) map[code].push(h[c2]);
-          }
+      if (progC >= 0 && !programs[code]) { var pg = String(v[r][progC]).trim(); if (pg) programs[code] = pg; }
+      if (nameC >= 0) {
+        var nm = String(v[r][nameC]).trim();
+        var wk = weekC >= 0 ? String(v[r][weekC]).trim() : '';
+        var wt = wtC >= 0 ? String(v[r][wtC]).trim() : '';
+        if (wk && /^\d+$/.test(wk)) wk = 'Week' + ('0' + wk).slice(-2);
+        if (wt && /^\d+(\.\d+)?$/.test(wt)) wt = wt + '%';
+        var label = [nm, wk, wt].filter(function (x) { return x !== ''; }).join(', ');
+        if (label && /[A-Za-z0-9]/.test(label) && map[code].indexOf(label) < 0) map[code].push(label);
+      } else {
+        // Fallback: no recognisable name column — keep each non-meta cell intact.
+        for (var cc = 0; cc < h.length; cc++) {
+          if (cc === codeC || hl[cc].indexOf('code') >= 0 || hl[cc].indexOf('program') >= 0 || hl[cc] === 'id') continue;
+          var cell = String(v[r][cc]).trim();
+          if (cell && /[A-Za-z]/.test(cell) && map[code].indexOf(cell) < 0) map[code].push(cell);
         }
       }
     }
   }
-  try { cache.put('assess_v1', JSON.stringify(map), CACHE_SECONDS); } catch (e) {}
-  return map;
+  var out = { assessments: map, programs: programs };
+  try { cache.put('assess_v2', JSON.stringify(out), CACHE_SECONDS); } catch (e) {}
+  return out;
 }
 
 /* ---------------- APC per program ---------------- */
@@ -191,7 +188,10 @@ function handleCourses_(e) {
     if (!acc) return json_({ ok: true, authorized: false });
     var amap = readAssessMap_();
     var mine = readCourses_().filter(function (c) { return String(c.id) === String(acc.id); });
-    mine.forEach(function (c) { c.assessments = amap[c.code] || []; });
+    mine.forEach(function (c) {
+      c.assessments = amap.assessments[c.code] || [];
+      if (!c.program) c.program = amap.programs[c.code] || '';
+    });
     return json_({ ok: true, authorized: true, id: acc.id, name: acc.name, courses: mine });
   } catch (err) { return json_({ ok: false, error: String(err) }); }
 }
@@ -250,6 +250,7 @@ function doPost(e) {
     function put(name, val) { var i = headers.indexOf(name); if (i >= 0) row[i] = val; }
     put('Program', body.program || '');
     put('APC Email', apc && apc.email ? apc.email : '');
+    put('APC Name', apc && apc.name ? apc.name : '');
     put('Timestamp', new Date());
     put('Status', body.status || '');
 
