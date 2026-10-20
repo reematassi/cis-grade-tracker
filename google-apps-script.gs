@@ -99,46 +99,57 @@ function readCourses_() {
 // Returns { assessments: {code -> ["Name, Week, Weight", ...]}, programs: {code -> program} }.
 // The assessments sheet has one row per course-assessment with separate Name / Week / Weight
 // columns; each assessment is composed into a single "Name, Week, Weight" label.
+// Returns { assessments: {code -> ["Name, Week, Weight", ...]}, programs: {code -> program} }.
+// The assessments sheet has ONE ROW PER COURSE with several Assessment/Week/Weight column
+// groups across that row (e.g. Assessment 1, Week 1, Weight 1, Assessment 2, Week 2, Weight 2 ...).
+// Every group in the course's row is collected, each composed into one "Name, Week, Weight" label.
+// A course that is not in this file gets no assessments (its dropdown stays empty).
 function readAssessMap_() {
   var cache = CacheService.getScriptCache();
-  var hit = cache.get('assess_v2');
+  var hit = cache.get('assess_v3');
   if (hit) return JSON.parse(hit);
   var map = {}, programs = {};
   var v = SpreadsheetApp.openById(COURSE_ASSESS_FILE_ID).getSheets()[0].getDataRange().getValues();
   if (v.length >= 2) {
-    var h = v[0].map(function (x) { return String(x).trim(); });
-    var hl = h.map(function (x) { return x.toLowerCase(); });
-    function find(preds) { for (var c = 0; c < hl.length; c++) for (var p = 0; p < preds.length; p++) if (preds[p](hl[c])) return c; return -1; }
-    var codeC = find([function (x) { return x.indexOf('code') >= 0; }]);
-    var nameC = find([function (x) { return x.indexOf('assessment') >= 0; }, function (x) { return x.indexOf('tool') >= 0; }, function (x) { return x === 'name' || x === 'type'; }]);
-    var weekC = find([function (x) { return x.indexOf('week') >= 0; }]);
-    var wtC = find([function (x) { return x.indexOf('weight') >= 0; }, function (x) { return x.indexOf('percent') >= 0; }, function (x) { return x.indexOf('%') >= 0; }]);
-    var progC = find([function (x) { return x.indexOf('program') >= 0 || x.indexOf('programme') >= 0; }]);
+    var hl = v[0].map(function (x) { return String(x).trim().toLowerCase(); });
+    var codeC = -1, progC = -1, cols = [];
+    for (var c = 0; c < hl.length; c++) {
+      var x = hl[c];
+      if (codeC < 0 && x.indexOf('code') >= 0) { codeC = c; continue; }
+      if (progC < 0 && (x.indexOf('program') >= 0 || x.indexOf('programme') >= 0)) { progC = c; continue; }
+      var type = '';
+      if (x.indexOf('assessment') >= 0 || x.indexOf('tool') >= 0 || x === 'name' || x === 'type' || x === 'title') type = 'name';
+      else if (x.indexOf('week') >= 0) type = 'week';
+      else if (x.indexOf('weight') >= 0 || x.indexOf('percent') >= 0 || x.indexOf('%') >= 0) type = 'weight';
+      if (type) { var m = x.match(/(\d+)/); cols.push({ c: c, type: type, num: m ? parseInt(m[1], 10) : null }); }
+    }
+    var ctr = { name: 0, week: 0, weight: 0 };
+    cols.forEach(function (o) { ctr[o.type]++; if (o.num === null) o.num = ctr[o.type]; });
     for (var r = 1; r < v.length; r++) {
       var code = codeC >= 0 ? String(v[r][codeC]).trim() : '';
       if (!code) continue;
       if (!map[code]) map[code] = [];
       if (progC >= 0 && !programs[code]) { var pg = String(v[r][progC]).trim(); if (pg) programs[code] = pg; }
-      if (nameC >= 0) {
-        var nm = String(v[r][nameC]).trim();
-        var wk = weekC >= 0 ? String(v[r][weekC]).trim() : '';
-        var wt = wtC >= 0 ? String(v[r][wtC]).trim() : '';
+      var groups = {};
+      cols.forEach(function (o) {
+        var val = String(v[r][o.c]).trim();
+        if (val === '') return;
+        if (!groups[o.num]) groups[o.num] = {};
+        groups[o.num][o.type] = val;
+      });
+      Object.keys(groups).map(Number).sort(function (a, b) { return a - b; }).forEach(function (n) {
+        var g = groups[n];
+        if (!g.name) return; // an assessment must have a name
+        var wk = g.week || '', wt = g.weight || '';
         if (wk && /^\d+$/.test(wk)) wk = 'Week' + ('0' + wk).slice(-2);
         if (wt && /^\d+(\.\d+)?$/.test(wt)) wt = wt + '%';
-        var label = [nm, wk, wt].filter(function (x) { return x !== ''; }).join(', ');
-        if (label && /[A-Za-z0-9]/.test(label) && map[code].indexOf(label) < 0) map[code].push(label);
-      } else {
-        // Fallback: no recognisable name column — keep each non-meta cell intact.
-        for (var cc = 0; cc < h.length; cc++) {
-          if (cc === codeC || hl[cc].indexOf('code') >= 0 || hl[cc].indexOf('program') >= 0 || hl[cc] === 'id') continue;
-          var cell = String(v[r][cc]).trim();
-          if (cell && /[A-Za-z]/.test(cell) && map[code].indexOf(cell) < 0) map[code].push(cell);
-        }
-      }
+        var label = [g.name, wk, wt].filter(function (x) { return x !== ''; }).join(', ');
+        if (label && map[code].indexOf(label) < 0) map[code].push(label);
+      });
     }
   }
   var out = { assessments: map, programs: programs };
-  try { cache.put('assess_v2', JSON.stringify(out), CACHE_SECONDS); } catch (e) {}
+  try { cache.put('assess_v3', JSON.stringify(out), CACHE_SECONDS); } catch (e) {}
   return out;
 }
 

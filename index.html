@@ -460,7 +460,7 @@ function updateState(){
   const dyn=$("#dyn");
   if(entered&&sumOver()){
     dyn.innerHTML=`<div class="notice bad"><b>Check the numbers.</b> The total students across A, B and F (${sumCounts()}) exceed the enrolled total (${enr||0}). Please correct the entries.</div>`;
-    $("#btnSave").disabled=false;return;
+    $("#btnSave").disabled=true;return;
   }
   let html="";
   if(entered){
@@ -474,7 +474,7 @@ function updateState(){
     const j=$("#e_just");if(j)j.addEventListener("input",e=>{curRec.justification=e.target.value;});
     const cf=$("#e_conf");if(cf)cf.addEventListener("change",e=>{curRec.confirmed=e.target.checked;});
   }
-  $("#btnSave").disabled=!(curAssess&&entered);
+  $("#btnSave").disabled=!(curAssess&&entered&&!sumOver());
 }
 
 async function saveEntry(){
@@ -489,11 +489,11 @@ async function saveEntry(){
   try{
     const ok=await cloudSubmit(payload);
     if(ok){curRec.timestamp=new Date().toISOString();$("#recTs").textContent="Recorded "+formatTs(curRec.timestamp);renderCards();
-      if(red)toast("Saved — sent to the Academic Program Chair for review");
+      if(red)showPopup("Thank You!","The assessment details has been sent to the APC for approval as your grades are not within the accepted grades.");
       else showPopup("Thank you!","The submitted grades are within the accepted ranges. Please proceed and post the grades to your students. A confirmation email has been sent to you.");}
     else toast("Saved, but the email/record could not be confirmed. Please retry.");
   }catch(e){toast("Could not save right now. Please try again.");}
-  btn.textContent="Save & notify";btn.disabled=!(curAssess&&allEntered());
+  btn.textContent="Save & notify";btn.disabled=!(curAssess&&allEntered()&&!sumOver());
 }
 function buildSubmit(){
   const r=curRow,rec=curRec,enr=enrolledOf(r);
