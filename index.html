@@ -153,6 +153,12 @@ mark{background:color-mix(in srgb,var(--focus) 32%,transparent);color:inherit;bo
 .ghost:hover{border-color:var(--warn);color:var(--warn)}
 .savehint{margin-left:auto;align-self:center;color:var(--muted);font-size:12.5px}
 
+.scrim{position:fixed;inset:0;background:rgba(10,15,25,.5);z-index:90;display:grid;place-items:center;padding:20px}
+.scrim[hidden]{display:none}
+.pop-card{background:var(--surface);border:1px solid var(--line-2);border-radius:14px;box-shadow:var(--shadow);width:min(420px,100%);padding:24px;text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center}
+.pop-card h3{font-family:var(--serif);font-size:19px}
+.pop-card p{color:var(--fg);margin:0;line-height:1.55}
+.pop-card .btn{min-width:120px;justify-content:center}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);z-index:80;background:var(--fg);color:var(--bg);padding:10px 18px;border-radius:999px;font-weight:500;font-size:13px;box-shadow:var(--shadow);opacity:0;transition:opacity .2s,transform .2s;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
@@ -209,6 +215,13 @@ mark{background:color-mix(in srgb,var(--focus) 32%,transparent);color:inherit;bo
   </main>
 </div>
 
+<div class="scrim" id="popScrim" hidden>
+  <div class="pop-card">
+    <h3 id="popTitle"></h3>
+    <p id="popMsg"></p>
+    <button class="btn primary" id="popOk">OK</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -230,6 +243,7 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function hl(t,q){t=String(t==null?"":t);if(!q)return esc(t);const i=t.toLowerCase().indexOf(q.toLowerCase());if(i<0)return esc(t);return esc(t.slice(0,i))+"<mark>"+esc(t.slice(i,i+q.length))+"</mark>"+esc(t.slice(i+q.length));}
 let toastT;function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove("show"),2200);}
+function showPopup(title,msg){$("#popTitle").textContent=title;$("#popMsg").textContent=msg;$("#popScrim").hidden=false;}
 function authEmail(){return (AUTH&&AUTH.email)||"";}
 function cloudUrl(){return CLOUD_URL||"";}
 function recKey(crn,assess){return String(crn)+"||"+String(assess);}
@@ -314,6 +328,7 @@ async function loadData(){
         const enr=parseFloat(gcell(row,idx("Num Students")))||0;
         const cnt=s=>{const n=parseFloat(String(s).replace("%",""));return (isNaN(n)||!enr)?"":String(Math.round(n/100*enr));};
         rec.a=cnt(gcell(row,idx("% A band")));rec.b=cnt(gcell(row,idx("% B band")));rec.f=cnt(gcell(row,idx("% F band")));
+        rec.moderation=gcell(row,idx("Post-moderation"));
         rec.status=gcell(row,idx("Status"));rec.timestamp=gcell(row,idx("Timestamp"));
         store[recKey(crn,assess)]=rec;}
     }
@@ -368,13 +383,15 @@ function openEntry(row){
       </div>
     </div>
     <div class="panel">
-      <div class="panel-row one">
+      <div class="panel-row">
         <div class="field combo" id="assessCombo">
           <label class="lbl" for="assessInput">Assessment</label>
           <input class="inp" id="assessInput" type="text" placeholder="Choose or type an assessment&hellip;" autocomplete="off">
           <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           <div class="pop" id="assessPop" hidden></div>
         </div>
+        <div class="field"><label class="lbl" for="e_mod">Post-moderation done</label>
+          <select class="inp" id="e_mod"><option value="">Select</option>${POSTMOD.map(o=>`<option>${o}</option>`).join("")}</select></div>
       </div>
       <div id="bands"></div>
       <div id="dyn"></div>
@@ -388,6 +405,7 @@ function openEntry(row){
   const inp=$("#assessInput"),pop=$("#assessPop");
   const combo=makeCombo(inp,pop,assessOptions(row),o=>{inp.value=o.value;selectAssessment(o.value);},(o,q)=>`${hl(o.value,q)}`);
   inp.addEventListener("input",()=>{selectAssessment(inp.value.trim());});
+  $("#e_mod").addEventListener("change",e=>{if(curRec)curRec.moderation=e.target.value;});
   renderBands();
   $("#btnSave").addEventListener("click",saveEntry);
   $("#btnClear").addEventListener("click",clearEntry);
@@ -400,6 +418,7 @@ function selectAssessment(name){
   curRec=getRec(curRow.crn,name);
   // reflect saved values
   for(const b of BANDS){const el=$("#e_"+b.k);if(el)el.value=curRec[b.k]||"";}
+  const mod=$("#e_mod");if(mod)mod.value=curRec.moderation||"";
   $("#recTs").textContent=curRec.timestamp?("Recorded "+formatTs(curRec.timestamp)):"";
   renderBands();updateState();
 }
@@ -424,6 +443,9 @@ function renderBands(){
 function bandPct(k){return pctOf(curRec?curRec[k]:"",enrolledOf(curRow));}
 function anyRed(){return BANDS.some(b=>{const p=bandPct(b.k);return p!=null&&p>b.cap;});}
 function allEntered(){return BANDS.every(b=>curRec&&curRec[b.k]!=="");}
+function cntOf(k){const n=parseInt(curRec?curRec[k]:"",10);return isNaN(n)?0:n;}
+function sumCounts(){return cntOf("a")+cntOf("b")+cntOf("f");}
+function sumOver(){return sumCounts()>enrolledOf(curRow);}
 
 function updateState(){
   if(!curRec){return;}
@@ -436,6 +458,10 @@ function updateState(){
   }
   const red=anyRed(), entered=allEntered();
   const dyn=$("#dyn");
+  if(entered&&sumOver()){
+    dyn.innerHTML=`<div class="notice bad"><b>Check the numbers.</b> The total students across A, B and F (${sumCounts()}) exceed the enrolled total (${enr||0}). Please correct the entries.</div>`;
+    $("#btnSave").disabled=false;return;
+  }
   let html="";
   if(entered){
     if(red){html+=`<div class="notice bad"><b>Outside the accepted range.</b> One or more bands exceed the accepted percentage. Please provide a justification — this section will be sent to the Academic Program Chair for review.</div>`
@@ -454,6 +480,7 @@ function updateState(){
 async function saveEntry(){
   if(!curRec||!curAssess){toast("Choose an assessment first");return;}
   if(!allEntered()){toast("Enter the number of students in all three bands");return;}
+  if(sumOver()){showPopup("Check the numbers","The total number of students across A, B and F ("+sumCounts()+") exceeds the enrolled total ("+(enrolledOf(curRow)||0)+"). Please correct the entries.");return;}
   if(!curRec.confirmed){toast("Please tick the confirmation box before saving");return;}
   const red=anyRed();
   if(red&&!(curRec.justification&&curRec.justification.trim())){toast("Please add a justification for the out-of-range grades");return;}
@@ -461,9 +488,9 @@ async function saveEntry(){
   const payload=buildSubmit();
   try{
     const ok=await cloudSubmit(payload);
-    if(ok){curRec.timestamp=new Date().toISOString();$("#recTs").textContent="Recorded "+formatTs(curRec.timestamp);
-      toast(red?"Saved — sent to the Academic Program Chair for review":"Saved — confirmation emailed");
-      renderCards();}
+    if(ok){curRec.timestamp=new Date().toISOString();$("#recTs").textContent="Recorded "+formatTs(curRec.timestamp);renderCards();
+      if(red)toast("Saved — sent to the Academic Program Chair for review");
+      else showPopup("Thank you!","The submitted grades are within the accepted ranges. Please proceed and post the grades to your students. A confirmation email has been sent to you.");}
     else toast("Saved, but the email/record could not be confirmed. Please retry.");
   }catch(e){toast("Could not save right now. Please try again.");}
   btn.textContent="Save & notify";btn.disabled=!(curAssess&&allEntered());
@@ -474,9 +501,9 @@ function buildSubmit(){
   const status=red?"Sent to APC for Approval":"To be posted";
   rec.status=status;
   const H=["Campus","Course Code","Course Name","CRN","Assessment","Num Students",
-    "% A band","% B band","% F band","Faculty Name","Faculty Email","Timestamp","Status"];
+    "% A band","% B band","% F band","Faculty Name","Faculty Email","Post-moderation","Program","APC Email","Timestamp","Status"];
   const row=[r.campus||"",r.code||"",r.name||"",String(r.crn),curAssess,enr,
-    fmtp(bandPct("a")),fmtp(bandPct("b")),fmtp(bandPct("f")),(AUTH.name||""),authEmail(),"",status];
+    fmtp(bandPct("a")),fmtp(bandPct("b")),fmtp(bandPct("f")),(AUTH.name||""),authEmail(),(rec.moderation||""),r.program||"","","",status];
   return {action:"submit",token:SHEET_TOKEN,email:authEmail(),crn:String(r.crn),assessment:curAssess,
     red:red,status:status,program:r.program||"",justification:rec.justification||"",
     courseCode:r.code||"",courseName:r.name||"",headers:H,row:row};
@@ -490,14 +517,12 @@ async function cloudSubmit(payload){
 }
 function clearEntry(){
   if(!curAssess){return;}
+  // Clear only resets the form. Saved submissions remain in the Data file as a permanent audit trail.
   store[recKey(curRow.crn,curAssess)]=blankRec();curRec=getRec(curRow.crn,curAssess);
   for(const b of BANDS){const el=$("#e_"+b.k);if(el)el.value="";}
   const mod=$("#e_mod");if(mod)mod.value="";
   $("#recTs").textContent="";
-  // tell the server to remove this section-assessment record
-  const url=cloudUrl();if(url){const p={action:"delete",token:SHEET_TOKEN,email:authEmail(),crn:String(curRow.crn),assessment:curAssess};
-    fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(p)}).catch(()=>{try{fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(p)});}catch(e){}});}
-  renderBands();renderCards();toast("Cleared");
+  renderBands();toast("Cleared — enter new values");
 }
 
 /* ---------- theme ---------- */
@@ -507,6 +532,8 @@ function clearEntry(){
     const cur=root.getAttribute("data-theme")||(dark?"dark":"light");const next=cur==="dark"?"light":"dark";
     root.setAttribute("data-theme",next);try{localStorage.setItem("hct_theme",next);}catch(e){}});})();
 
+$("#popOk").addEventListener("click",()=>{$("#popScrim").hidden=true;});
+$("#popScrim").addEventListener("mousedown",e=>{if(e.target===$("#popScrim"))$("#popScrim").hidden=true;});
 $("#btnClose").addEventListener("click",()=>{try{window.open('','_self');}catch(e){}try{window.close();}catch(e){}setTimeout(()=>toast("Your work is saved. You can now close this browser tab."),250);});
 window.addEventListener("DOMContentLoaded",()=>{const g=$("#gateEmail");if(g)g.focus();});
 </script>

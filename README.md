@@ -20,12 +20,18 @@ app with no code change.
    email with the data and justification for review (faculty copied).
 5. Every submission is **timestamped** in the Data sheet.
 
-**Data sheet columns** (written automatically): Campus, Course Code, Course Name, CRN, Assessment,
-Num Students, % A band, % B band, % F band, Faculty Name, Faculty Email, Timestamp, Status
-(*To be posted* when all green, *Sent to APC for Approval* when any band is over). Justification and
-the confirmation are used in the workflow/email but are not stored as columns.
+**Data sheet columns** (written automatically, one row per submission):
+Campus, Course Code, Course Name, CRN, Assessment, Num Students, % A band, % B band, % F band,
+Faculty Name, Faculty Email, Post-moderation, Program, APC Email, Timestamp, Status
+(*To be posted* when all within range, *Sent to APC for Approval* when any band is over). The APC
+Email is resolved on the server from the course's Program, so each record is tied to the correct
+APC. Every submission is appended as a **new row** (nothing is overwritten) — the Timestamp tracks
+each entry. Justification and the confirmation drive the email/workflow but are not stored as columns.
 
-> If your Data tab still has the **old** columns, clear that tab once (delete its rows) so the new
+**Emails:** within range → confirmation to the **instructor only**; out of range → to the **APC**
+with the **instructor copied**.
+
+> If your Data tab still has **older** columns, clear that tab once (delete its rows) so the new
 > headers are written on the next save.
 
 ## The four Drive files (read live, by ID)

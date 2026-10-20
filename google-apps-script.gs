@@ -121,7 +121,9 @@ function readAssessMap_() {
         if (cc === codeC || isMeta(hl[cc])) continue;
         var cell = String(v[r][cc]).trim();
         if (!cell) continue;
-        var parts = cell.split(/[,;|\/\n]+/);
+        // Each cell is ONE assessment kept intact (e.g. "Exam, Week04, Weight 20%");
+        // only split when several assessments share a cell on separate lines.
+        var parts = cell.split(/[\r\n]+/);
         for (var pi = 0; pi < parts.length; pi++) {
           var a = parts[pi].trim();
           if (a && /[A-Za-z]/.test(a) && map[code].indexOf(a) < 0) map[code].push(a);
@@ -236,24 +238,25 @@ function doPost(e) {
       return json_({ ok: true, deleted: true });
     }
 
-    // submit
+    // submit — APPEND every submission as its own row (full audit trail; the Timestamp
+    // differentiates records). We never overwrite earlier entries.
     var headers = body.headers || [];
     var row = body.row || [];
-    if (sh.getLastRow() === 0 && headers.length) sh.appendRow(headers); // headers already include Timestamp
+    if (sh.getLastRow() === 0 && headers.length) sh.appendRow(headers);
 
-    var fr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
-    var crnCol = fr.indexOf('CRN');  if (crnCol < 0) crnCol = 5;
-    var asCol = fr.indexOf('Assessment'); if (asCol < 0) asCol = 8;
-    var tsCol = fr.indexOf('Timestamp');
-    if (tsCol < 0) { tsCol = sh.getLastColumn(); sh.getRange(1, tsCol + 1).setValue('Timestamp'); }
+    // Fill the server-authoritative columns by heading, so the APC email is resolved here
+    // (guarantees the right APC per course even when several courses are entered in one session).
+    var apc = apcLookup_(body.program);
+    function put(name, val) { var i = headers.indexOf(name); if (i >= 0) row[i] = val; }
+    put('Program', body.program || '');
+    put('APC Email', apc && apc.email ? apc.email : '');
+    put('Timestamp', new Date());
+    put('Status', body.status || '');
 
-    var target = findRow_(sh, crnCol, asCol, body.crn, body.assessment);
-    if (target < 0) target = sh.getLastRow() + 1;
-    if (row.length) sh.getRange(target, 1, 1, row.length).setValues([row]);
-    sh.getRange(target, tsCol + 1).setValue(new Date()); // timestamp for every submission
+    sh.appendRow(row);
 
-    var emailed = sendEmails_(body);
-    return json_({ ok: true, emailed: emailed });
+    var emailed = sendEmails_(body, apc);
+    return json_({ ok: true, emailed: emailed, apc: apc && apc.email ? apc.email : '' });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
@@ -283,25 +286,27 @@ function removeRow_(sh, crn, assess) {
 }
 
 /* ---------------- email ---------------- */
-function sendEmails_(body) {
+function sendEmails_(body, apc) {
   try {
+    if (apc === undefined) apc = apcLookup_(body.program);
     var H = body.headers || [], row = body.row || [];
     function g(name) { var i = H.indexOf(name); return i >= 0 ? row[i] : ''; }
     var red = !!body.red;
     var faculty = body.email;
-    var apc = apcLookup_(body.program);
-    var code = g('Course Code'), crn = body.crn, assess = body.assessment;
-    var subject = (red ? '[Approval needed] ' : '[Submitted] ') + code + ' CRN ' + crn + ' — ' + assess + ' grade distribution';
+    var code = g('Course Code');
+    var subject = (red ? '[Approval needed] ' : '[Submitted] ') + code + ' CRN ' + body.crn + ' — ' + body.assessment + ' grade distribution';
     var html = emailBody_(body, apc, red);
 
     if (red) {
-      var opts = { to: apc ? apc.email : faculty, subject: subject, htmlBody: html, name: 'CIS Grade Tracker', replyTo: faculty };
-      if (apc) opts.cc = faculty;
-      MailApp.sendEmail(opts);
+      // OUT OF RANGE → APC is the main recipient, the instructor is copied.
+      MailApp.sendEmail({
+        to: (apc && apc.email) ? apc.email : faculty,
+        cc: (apc && apc.email) ? faculty : '',
+        subject: subject, htmlBody: html, name: 'CIS Grade Tracker', replyTo: faculty
+      });
     } else {
-      var opts2 = { to: faculty, subject: subject, htmlBody: html, name: 'CIS Grade Tracker' };
-      if (apc) opts2.cc = apc.email;
-      MailApp.sendEmail(opts2);
+      // WITHIN RANGE → confirmation to the instructor only.
+      MailApp.sendEmail({ to: faculty, subject: subject, htmlBody: html, name: 'CIS Grade Tracker' });
     }
     return true;
   } catch (e) { return false; }
