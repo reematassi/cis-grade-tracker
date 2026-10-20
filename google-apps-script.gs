@@ -105,28 +105,35 @@ function readAssessMap_() {
   if (v.length >= 2) {
     var h = v[0].map(function (x) { return String(x).trim(); });
     var hl = h.map(function (x) { return x.toLowerCase(); });
-    function find(preds) { for (var c = 0; c < hl.length; c++) for (var p = 0; p < preds.length; p++) if (preds[p](hl[c])) return c; return -1; }
-    var codeC = find([function (x) { return x.indexOf('code') >= 0; }]);
-    var assessC = find([function (x) { return x.indexOf('assessment') >= 0; }, function (x) { return x.indexOf('tool') >= 0; }, function (x) { return x === 'type'; }]);
-    var skip = {}; if (codeC >= 0) skip[codeC] = 1;
-    for (var c = 0; c < hl.length; c++) {
-      if (hl[c].indexOf('program') >= 0 || hl[c].indexOf('title') >= 0 || hl[c].indexOf('name') >= 0 ||
-          hl[c].indexOf('crn') >= 0 || hl[c].indexOf('campus') >= 0 || hl[c].indexOf('student') >= 0 ||
-          hl[c] === 'id' || hl[c].indexOf('weight') >= 0) skip[c] = 1;
+    var codeC = -1;
+    for (var c = 0; c < hl.length; c++) if (codeC < 0 && hl[c].indexOf('code') >= 0) codeC = c;
+    function isMeta(x) {
+      return x.indexOf('code') >= 0 || x.indexOf('program') >= 0 || x.indexOf('title') >= 0 ||
+             x.indexOf('name') >= 0 || x.indexOf('crn') >= 0 || x.indexOf('campus') >= 0 ||
+             x.indexOf('student') >= 0 || x === 'id' || x.indexOf('weight') >= 0 || x.indexOf('email') >= 0;
     }
     for (var r = 1; r < v.length; r++) {
       var code = codeC >= 0 ? String(v[r][codeC]).trim() : '';
       if (!code) continue;
       if (!map[code]) map[code] = [];
-      if (assessC >= 0) {
-        var a = String(v[r][assessC]).trim();
-        if (a && map[code].indexOf(a) < 0) map[code].push(a);
-      } else {
+      // Collect assessment names from every non-meta column in the course's row(s).
+      for (var cc = 0; cc < h.length; cc++) {
+        if (cc === codeC || isMeta(hl[cc])) continue;
+        var cell = String(v[r][cc]).trim();
+        if (!cell) continue;
+        var parts = cell.split(/[,;|\/\n]+/);
+        for (var pi = 0; pi < parts.length; pi++) {
+          var a = parts[pi].trim();
+          if (a && /[A-Za-z]/.test(a) && map[code].indexOf(a) < 0) map[code].push(a);
+        }
+      }
+      // Fallback: if no assessment VALUES were found, use the headings of the filled columns.
+      if (map[code].length === 0) {
         for (var c2 = 0; c2 < h.length; c2++) {
-          if (skip[c2]) continue;
-          var cell = String(v[r][c2]).trim();
-          if (cell && cell.toLowerCase() !== 'no' && cell !== '0' && cell.toLowerCase() !== 'false') {
-            if (map[code].indexOf(h[c2]) < 0) map[code].push(h[c2]);
+          if (c2 === codeC || isMeta(hl[c2])) continue;
+          var cell2 = String(v[r][c2]).trim();
+          if (cell2 && cell2.toLowerCase() !== 'no' && cell2 !== '0' && cell2.toLowerCase() !== 'false') {
+            if (/[A-Za-z]/.test(h[c2]) && map[code].indexOf(h[c2]) < 0) map[code].push(h[c2]);
           }
         }
       }
@@ -232,7 +239,7 @@ function doPost(e) {
     // submit
     var headers = body.headers || [];
     var row = body.row || [];
-    if (sh.getLastRow() === 0 && headers.length) sh.appendRow(headers.concat(['Timestamp']));
+    if (sh.getLastRow() === 0 && headers.length) sh.appendRow(headers); // headers already include Timestamp
 
     var fr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
     var crnCol = fr.indexOf('CRN');  if (crnCol < 0) crnCol = 5;
@@ -280,11 +287,11 @@ function sendEmails_(body) {
   try {
     var H = body.headers || [], row = body.row || [];
     function g(name) { var i = H.indexOf(name); return i >= 0 ? row[i] : ''; }
-    var red = (body.status === 'Out of range');
+    var red = !!body.red;
     var faculty = body.email;
     var apc = apcLookup_(body.program);
-    var code = g('Course Code'), title = g('Course Title'), crn = body.crn, assess = body.assessment;
-    var subject = (red ? '[Review needed] ' : '[Submitted] ') + code + ' CRN ' + crn + ' — ' + assess + ' grade distribution';
+    var code = g('Course Code'), crn = body.crn, assess = body.assessment;
+    var subject = (red ? '[Approval needed] ' : '[Submitted] ') + code + ' CRN ' + crn + ' — ' + assess + ' grade distribution';
     var html = emailBody_(body, apc, red);
 
     if (red) {
@@ -303,16 +310,16 @@ function emailBody_(body, apc, red) {
   var H = body.headers || [], row = body.row || [];
   function g(name) { var i = H.indexOf(name); return i >= 0 ? row[i] : ''; }
   var rows = [
-    ['Course', g('Course Code') + ' — ' + g('Course Title')],
-    ['CRN', body.crn], ['Program', g('Program')], ['Instructor', g('Instructor')],
-    ['Assessment', body.assessment], ['Enrolled students', g('Enrolled')],
-    ['A / A-', g('A count') + '  (' + g('A %') + ', cap ' + CAPS.a + '%)'],
-    ['B+ / B / B-', g('B+/B/B- count') + '  (' + g('B %') + ', cap ' + CAPS.b + '%)'],
-    ['F', g('F count') + '  (' + g('F %') + ', cap ' + CAPS.f + '%)'],
-    ['Post-moderation done', g('Post-moderation')],
+    ['Course', g('Course Code') + ' — ' + g('Course Name')],
+    ['CRN', body.crn], ['Program', body.program || ''],
+    ['Assessment', body.assessment], ['Enrolled students', g('Num Students')],
+    ['A / A- band', g('% A band') + '  (cap ' + CAPS.a + '%)'],
+    ['B+ / B / B- band', g('% B band') + '  (cap ' + CAPS.b + '%)'],
+    ['F band', g('% F band') + '  (cap ' + CAPS.f + '%)'],
+    ['Faculty', g('Faculty Name') + ' <' + g('Faculty Email') + '>'],
     ['Status', g('Status')]
   ];
-  if (red) rows.push(['Justification', g('Justification')]);
+  if (red) rows.push(['Justification', body.justification || '']);
   var table = rows.map(function (p) {
     return '<tr><td style="padding:4px 10px;color:#566782;white-space:nowrap">' + p[0] +
       '</td><td style="padding:4px 10px;font-weight:600">' + String(p[1] == null ? '' : p[1]) + '</td></tr>';
@@ -328,6 +335,18 @@ function emailBody_(body, apc, red) {
 }
 
 function keepWarm() { try { accessMap_(); readCourses_(); readAssessMap_(); apcMap_(); } catch (e) {} }
+
+// Run this ONCE from the editor (Run button) to authorise Gmail sending and confirm it works.
+// It sends a test email to you. After this, the app's automatic emails will go out.
+function sendTestEmail() {
+  var me = Session.getActiveUser().getEmail();
+  MailApp.sendEmail({
+    to: me,
+    subject: 'CIS Grade Tracker — test email',
+    htmlBody: '<p>If you received this, Gmail sending is authorised and the app can send APC notifications.</p>',
+    name: 'CIS Grade Tracker'
+  });
+}
 
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);

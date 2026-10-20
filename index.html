@@ -183,6 +183,7 @@ mark{background:color-mix(in srgb,var(--focus) 32%,transparent);color:inherit;bo
     <div class="spacer"></div>
     <span class="whoami" id="whoami" hidden></span>
     <div class="actions">
+      <button class="btn" id="btnClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>Close</button>
       <button class="btn icon" id="btnTheme" title="Toggle theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
     </div>
   </div>
@@ -235,9 +236,9 @@ function recKey(crn,assess){return String(crn)+"||"+String(assess);}
 function enrolledOf(row){const n=parseFloat(row.students);return isNaN(n)?0:n;}
 function pctOf(count,enr){if(count===""||count==null)return null;const n=parseFloat(count);if(isNaN(n)||!enr)return null;return Math.round((n/enr*1000))/10;}
 function formatTs(v){if(!v)return "—";const d=new Date(v);if(isNaN(d.getTime()))return String(v);try{return d.toLocaleString(undefined,{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch(e){return String(v);}}
-function blankRec(){return {a:"",b:"",f:"",moderation:"",confirmed:false,justification:"",status:"",timestamp:""};}
+function blankRec(){return {a:"",b:"",f:"",confirmed:false,justification:"",status:"",timestamp:""};}
 function getRec(crn,assess){const k=recKey(crn,assess);if(!store[k])store[k]=blankRec();return store[k];}
-function sectionHasData(crn){for(const k in store){if(k.indexOf(String(crn)+"||")===0){const r=store[k];if(r.a!==""||r.b!==""||r.f!==""||r.moderation){return true;}}}return false;}
+function sectionHasData(crn){for(const k in store){if(k.indexOf(String(crn)+"||")===0){const r=store[k];if(r.a!==""||r.b!==""||r.f!==""){return true;}}}return false;}
 
 /* ---------- combobox ---------- */
 function makeCombo(input,pop,options,onPick,render){
@@ -310,9 +311,9 @@ async function loadData(){
         const crn=String(row[idx("CRN")]||"").trim();const assess=String(row[idx("Assessment")]||"").trim();
         if(!crn||!assess)continue;
         const rec=blankRec();
-        rec.a=gcell(row,idx("A count"));rec.b=gcell(row,idx("B+/B/B- count"));rec.f=gcell(row,idx("F count"));
-        rec.moderation=gcell(row,idx("Post-moderation"));rec.justification=gcell(row,idx("Justification"));
-        rec.confirmed=String(gcell(row,idx("Confirmed"))).toLowerCase()==="yes";
+        const enr=parseFloat(gcell(row,idx("Num Students")))||0;
+        const cnt=s=>{const n=parseFloat(String(s).replace("%",""));return (isNaN(n)||!enr)?"":String(Math.round(n/100*enr));};
+        rec.a=cnt(gcell(row,idx("% A band")));rec.b=cnt(gcell(row,idx("% B band")));rec.f=cnt(gcell(row,idx("% F band")));
         rec.status=gcell(row,idx("Status"));rec.timestamp=gcell(row,idx("Timestamp"));
         store[recKey(crn,assess)]=rec;}
     }
@@ -367,15 +368,13 @@ function openEntry(row){
       </div>
     </div>
     <div class="panel">
-      <div class="panel-row">
+      <div class="panel-row one">
         <div class="field combo" id="assessCombo">
           <label class="lbl" for="assessInput">Assessment</label>
           <input class="inp" id="assessInput" type="text" placeholder="Choose or type an assessment&hellip;" autocomplete="off">
           <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           <div class="pop" id="assessPop" hidden></div>
         </div>
-        <div class="field"><label class="lbl" for="e_mod">Post-moderation done</label>
-          <select class="inp" id="e_mod"><option value="">Select</option>${POSTMOD.map(o=>`<option>${o}</option>`).join("")}</select></div>
       </div>
       <div id="bands"></div>
       <div id="dyn"></div>
@@ -390,7 +389,6 @@ function openEntry(row){
   const combo=makeCombo(inp,pop,assessOptions(row),o=>{inp.value=o.value;selectAssessment(o.value);},(o,q)=>`${hl(o.value,q)}`);
   inp.addEventListener("input",()=>{selectAssessment(inp.value.trim());});
   renderBands();
-  $("#e_mod").addEventListener("change",e=>{if(curRec){curRec.moderation=e.target.value;}});
   $("#btnSave").addEventListener("click",saveEntry);
   $("#btnClear").addEventListener("click",clearEntry);
   $("#btnSave").disabled=true;
@@ -402,7 +400,6 @@ function selectAssessment(name){
   curRec=getRec(curRow.crn,name);
   // reflect saved values
   for(const b of BANDS){const el=$("#e_"+b.k);if(el)el.value=curRec[b.k]||"";}
-  const mod=$("#e_mod");if(mod)mod.value=curRec.moderation||"";
   $("#recTs").textContent=curRec.timestamp?("Recorded "+formatTs(curRec.timestamp)):"";
   renderBands();updateState();
 }
@@ -439,26 +436,27 @@ function updateState(){
   }
   const red=anyRed(), entered=allEntered();
   const dyn=$("#dyn");
-  if(!entered){dyn.innerHTML="";$("#btnSave").disabled=true;return;}
-  if(red){
-    dyn.innerHTML=`<div class="notice bad"><b>Outside the accepted range.</b> One or more bands exceed the accepted percentage. Please provide a justification — this section will be sent to the Academic Program Chair for review.</div>
-      <div class="field" style="margin-top:12px"><label class="lbl" for="e_just">Justification (required)</label>
-        <textarea class="inp" id="e_just" rows="3" placeholder="Explain why the distribution is outside the accepted range&hellip;">${curRec?esc(curRec.justification):""}</textarea></div>`;
-    $("#e_just").addEventListener("input",e=>{curRec.justification=e.target.value;$("#btnSave").disabled=!e.target.value.trim();});
-    $("#btnSave").disabled=!(curRec.justification&&curRec.justification.trim());
-  }else{
-    dyn.innerHTML=`<div class="notice ok"><b>Within the accepted range</b> for all bands.</div>
-      <label class="confirm"><input type="checkbox" id="e_conf" ${curRec&&curRec.confirmed?"checked":""}>
-        <span>I confirm the accuracy and correctness of the submitted information.</span></label>`;
-    $("#e_conf").addEventListener("change",e=>{curRec.confirmed=e.target.checked;$("#btnSave").disabled=!e.target.checked;});
-    $("#btnSave").disabled=!(curRec&&curRec.confirmed);
+  let html="";
+  if(entered){
+    if(red){html+=`<div class="notice bad"><b>Outside the accepted range.</b> One or more bands exceed the accepted percentage. Please provide a justification — this section will be sent to the Academic Program Chair for review.</div>`
+      +`<div class="field" style="margin-top:12px"><label class="lbl" for="e_just">Justification (required)</label><textarea class="inp" id="e_just" rows="3" placeholder="Explain why the distribution is outside the accepted range&hellip;">${curRec?esc(curRec.justification):""}</textarea></div>`;}
+    else{html+=`<div class="notice ok"><b>Within the accepted range</b> for all bands.</div>`;}
+    html+=`<label class="confirm"><input type="checkbox" id="e_conf" ${curRec&&curRec.confirmed?"checked":""}><span>I confirm that the grade distribution entered above is accurate and correct, and has been reviewed for completeness.</span></label>`;
   }
+  dyn.innerHTML=html;
+  if(entered){
+    const j=$("#e_just");if(j)j.addEventListener("input",e=>{curRec.justification=e.target.value;});
+    const cf=$("#e_conf");if(cf)cf.addEventListener("change",e=>{curRec.confirmed=e.target.checked;});
+  }
+  $("#btnSave").disabled=!(curAssess&&entered);
 }
 
 async function saveEntry(){
-  if(!curRec||!curAssess)return;
+  if(!curRec||!curAssess){toast("Choose an assessment first");return;}
+  if(!allEntered()){toast("Enter the number of students in all three bands");return;}
+  if(!curRec.confirmed){toast("Please tick the confirmation box before saving");return;}
   const red=anyRed();
-  curRec.status=red?"Out of range":"Within range";
+  if(red&&!(curRec.justification&&curRec.justification.trim())){toast("Please add a justification for the out-of-range grades");return;}
   const btn=$("#btnSave");btn.disabled=true;btn.textContent="Saving…";
   const payload=buildSubmit();
   try{
@@ -466,18 +464,22 @@ async function saveEntry(){
     if(ok){curRec.timestamp=new Date().toISOString();$("#recTs").textContent="Recorded "+formatTs(curRec.timestamp);
       toast(red?"Saved — sent to the Academic Program Chair for review":"Saved — confirmation emailed");
       renderCards();}
-    else toast("Saved locally, but the email/record could not be confirmed. Please retry.");
+    else toast("Saved, but the email/record could not be confirmed. Please retry.");
   }catch(e){toast("Could not save right now. Please try again.");}
-  btn.textContent="Save & notify";updateState();
+  btn.textContent="Save & notify";btn.disabled=!(curAssess&&allEntered());
 }
 function buildSubmit(){
   const r=curRow,rec=curRec,enr=enrolledOf(r);
-  const H=["Email","Instructor","Campus","Course Code","Course Title","CRN","Program","Enrolled","Assessment",
-    "A count","A %","B+/B/B- count","B %","F count","F %","Post-moderation","Status","Confirmed","Justification"];
-  const row=[authEmail(),(r.instructor||AUTH.name||""),r.campus||"",r.code||"",r.name||"",String(r.crn),r.program||"",enr,curAssess,
-    rec.a,fmtp(bandPct("a")),rec.b,fmtp(bandPct("b")),rec.f,fmtp(bandPct("f")),rec.moderation||"",rec.status,rec.confirmed?"Yes":"No",rec.justification||""];
-  return {action:"submit",token:SHEET_TOKEN,email:authEmail(),crn:String(r.crn),assessment:curAssess,status:rec.status,
-    program:r.program||"",headers:H,row:row};
+  const red=anyRed();
+  const status=red?"Sent to APC for Approval":"To be posted";
+  rec.status=status;
+  const H=["Campus","Course Code","Course Name","CRN","Assessment","Num Students",
+    "% A band","% B band","% F band","Faculty Name","Faculty Email","Timestamp","Status"];
+  const row=[r.campus||"",r.code||"",r.name||"",String(r.crn),curAssess,enr,
+    fmtp(bandPct("a")),fmtp(bandPct("b")),fmtp(bandPct("f")),(AUTH.name||""),authEmail(),"",status];
+  return {action:"submit",token:SHEET_TOKEN,email:authEmail(),crn:String(r.crn),assessment:curAssess,
+    red:red,status:status,program:r.program||"",justification:rec.justification||"",
+    courseCode:r.code||"",courseName:r.name||"",headers:H,row:row};
 }
 function fmtp(p){return p==null?"":String(p)+"%";}
 async function cloudSubmit(payload){
@@ -505,6 +507,7 @@ function clearEntry(){
     const cur=root.getAttribute("data-theme")||(dark?"dark":"light");const next=cur==="dark"?"light":"dark";
     root.setAttribute("data-theme",next);try{localStorage.setItem("hct_theme",next);}catch(e){}});})();
 
+$("#btnClose").addEventListener("click",()=>{try{window.open('','_self');}catch(e){}try{window.close();}catch(e){}setTimeout(()=>toast("Your work is saved. You can now close this browser tab."),250);});
 window.addEventListener("DOMContentLoaded",()=>{const g=$("#gateEmail");if(g)g.focus();});
 </script>
 </body>
