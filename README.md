@@ -1,102 +1,79 @@
 # CIS Grade Tracker — 202610
 
-A single-page web app for recording course assessment plans by section (CRN), for the
-HCT CIS / Applied Data Science program. Pick a course, optionally narrow by the faculty
-teaching it, choose a section (CRN), and fill in the assessment details. Data is kept in the
-browser, can be exported as CSV / JSON, and can sync to one shared Google Sheet so you get a
-single copy of every user's data.
+A single-page web app for HCT CIS / Applied Data Science faculty to record assessment plans by
+course section (CRN). Faculty sign in with their HCT email, see **only the courses assigned to
+them**, and enter each section's assessment details. Everything is stored centrally in Google
+Sheets; the course list and access list are read **live** from Drive, so updating a sheet updates
+the app with no code change.
 
-## Features
+## How it works
 
-- **Find a course** — click the field to see all courses, or search by code or name
-  (e.g. `CIS-4913` or `capstone`).
-- **Faculty filter (scoped to the course)** — once a course is chosen, the Faculty box lists
-  only the instructors teaching *that* course; pick one to show just their sections, or leave
-  it on "All faculty".
-- **Section selector** — lists every CRN for the chosen course/faculty, filterable by CRN,
-  instructor or campus.
-- **Assessment data entry** per CRN — five blocks (**CW1, CW2, CW3, Final Assessment,
-  Final Grade**), each with: Assessment Tool, Week, Weight, % A/A-, % B+/B/B-, % F,
-  Post-moderation done — plus a Comments box.
-- **Searchable dropdowns** — the Assessment Tool list (18 tools, sorted) filters as you type;
-  so do the course and faculty fields.
-- **Controlled values**
-  - Week: `Week01` … `Week16`
-  - Assessment tools: Assignment, Case Study, Exam, Final Assignment,
-    Final Examination (Practical), Final Examination (Theoretical), Final Project,
-    In-Class Activity, Lab Assignment, Midterm, Portfolio, Practical Assessment, Presentation,
-    Professional Certification (PCQ), Project, Quiz, Report, Test
-  - Post-moderation done: `Yes` / `No`
-- **Automatic save** — entries save as you type (no Save button); sections with data get a
-  check in the list.
-- **Cloud sync to a Google Sheet** — see below. Gives you one central copy of everyone's data,
-  updated automatically.
-- **Only the owner can download** — the shared app has no download button, and the sheet URL is
-  write-only, so faculty enter data but cannot read or export it. You download the combined data
-  from your private Google Sheet.
-- **Built-in Help**, **light / dark theme**, responsive layout, and the **HCT logo** embedded.
-
-## Cloud sync — one copy of all users' data (Google Sheet)
-
-Because GitHub Pages is static, browsers can't share data on their own. To collect everyone's
-entries in one place, connect the app to a Google Sheet (one-time setup, ~5 minutes):
-
-1. Create a **Google Sheet** (this holds all data).
-2. In the Sheet: **Extensions → Apps Script**.
-3. Delete the sample code, paste all of **`google-apps-script.gs`** (included), and **Save**.
-4. **Deploy → New deployment → Web app**:
-   - *Execute as:* **Me**
-   - *Who has access:* **Anyone**
-   Deploy, authorise, and copy the **Web app URL** (ends in `/exec`).
-5. Paste that URL into the `CLOUD_URL = ""` line near the top of `index.html` (between the
-   quotes) before uploading to GitHub. Every user who opens your GitHub link then syncs to your
-   sheet automatically — there is nothing for them to configure.
-
-Once connected, every change each person makes is written to the sheet automatically (new CRNs
-are added, existing ones updated in place).
-
-**Your master copy:** open the Google Sheet any time — it has every user's data.
-**File → Download** saves it as **CSV** or **Excel (.xlsx)**.
-
-> **Who can read the data:** the app and the `/exec` URL can only *write* to the sheet — the read
-> endpoint is disabled in `google-apps-script.gs`. Faculty enter data through the app but cannot
-> download it. The full data is only in your Google Sheet, which only you can open, so only you
-> can download it.
->
-> **Who can write:** every save carries a shared passcode. `SHEET_TOKEN` in `index.html` must
-> equal `SHARED_TOKEN` in `google-apps-script.gs`; the script rejects any save without the exact
-> token. To change the passcode, update it in **both** files (and redeploy the script). This
-> stops casual/automated writes to the URL; note the token does sit in the page source, so treat
-> it as a gate, not strong encryption.
->
-> If you change the script, redeploy with **Manage deployments → ✏️ edit → Version: New version
-> → Deploy** so the change takes effect (the `/exec` URL stays the same).
-
-## Installing it on GitHub
-
-It is a single self-contained file — no build step, no dependencies.
-
-### Option A — upload in the browser (simplest)
-1. On github.com, create a new repository (e.g. `cis-grade-tracker`).
-2. **Add file → Upload files**, drag in `index.html` and `README.md` (and `google-apps-script.gs`
-   for reference), and **Commit**.
-3. **Settings → Pages** → *Deploy from a branch* → branch `main`, folder `/ (root)` → **Save**.
-4. After a minute it's live at `https://<your-username>.github.io/<repo>/`.
-
-### Option B — command line
-```bash
-git init
-git add index.html README.md google-apps-script.gs
-git commit -m "CIS Grade Tracker"
-git branch -M main
-git remote add origin https://github.com/<your-username>/<repo>.git
-git push -u origin main
 ```
-Then enable **Settings → Pages** as in step 3 above.
+Browser (GitHub Pages, static index.html)
+        │  email / data / courses  (HTTPS)
+        ▼
+Google Apps Script Web App  ──reads──►  Access sheet   (email → staff ID)
+   (runs as you)            ──reads──►  Courses sheet  (sections tagged with staff ID)
+                            ──writes─►  Data sheet     (the entered grades; this file)
+```
+
+1. **Sign in** — the app asks for an HCT email and checks it against the access sheet
+   **server-side** (the list never appears on the page). Unregistered emails are refused with
+   "Your email is not registered. Please contact your course team leader."
+2. **My courses** — after sign-in the app loads, live from the courses sheet, only the sections
+   whose **ID** matches the signed-in instructor.
+3. **Enter data** — five blocks per CRN (CW1, CW2, CW3, Final Assessment, Final Grade), each with
+   Assessment Tool, Week, Weight, % A/A-, % B+/B/B-, % F, Post-moderation done, plus Comments.
+   Percentages accept numbers only (0–100). A record is **saved to the sheet only when every field
+   is complete**; until then it shows a "Not saved" notice listing what's missing.
+4. **Timestamp** — the Data sheet stamps the date/time each record was first added (uneditable).
+5. **Privacy** — grade data is served only to signed-in faculty and limited to their own CRNs.
+   There is no download button; only you (the sheet owner) can download the full data.
+
+## The three files
+
+| Purpose | Where | Notes |
+|---|---|---|
+| **Data** (entered grades) | the Google Sheet this script is bound to | tab named `Data`, created on first save |
+| **Access list** | separate Google Sheet | columns: an **email** column and an **ID** (staff ID) column; a **name** column is optional |
+| **Courses** | separate Google Sheet | columns: **Campus, Course Code, Course Name, Instructor, CRN, Num. Students, ID** |
+
+The access `ID` and the courses `ID` must use the **same staff-ID values** — that's the link.
+Column headings are auto-detected, but keeping the headings above avoids surprises.
+
+File IDs are set near the top of `google-apps-script.gs`:
+```js
+var ACCESS_FILE_ID  = '1kZ7jXx1YLm-IOmj5JzNZ10tckUSOlLyhrGkdKpPA9BM';
+var COURSES_FILE_ID = '14l8dvhgC6_FDLeRf7mnxnc4XiarguHszFZ32vNpsiNg';
+```
+To update data later, **edit the same sheets** (don't upload a new file — that changes the ID).
+
+## Setup
+
+1. Open the **Data** Google Sheet → **Extensions → Apps Script**.
+2. Paste all of `google-apps-script.gs`, set the two file IDs above, and **Save**.
+3. **Deploy → New deployment → Web app**: *Execute as* **Me**, *Who has access* **Anyone** →
+   **Deploy** → authorise → copy the **Web app URL** (ends in `/exec`).
+4. Put that URL in `index.html` on the `CLOUD_URL` line, and make sure `SHEET_TOKEN` in
+   `index.html` matches `SHARED_TOKEN` in the script.
+5. Upload `index.html` to a GitHub repo → **Settings → Pages → Deploy from branch → main /(root)**.
+6. (Optional, free, faster) In Apps Script → **Triggers** (clock icon) → **Add trigger** →
+   function **keepWarm**, **Time-driven**, every **5 minutes**. Keeps the lists cached and warm.
+
+**After any script change**, redeploy with **Manage deployments → ✏️ edit → Version: New version →
+Deploy** (the `/exec` URL stays the same).
+
+## Security notes
+
+- The access check and course filtering run on Google's side, so the email list is never exposed.
+- Writes require a shared passcode (`SHEET_TOKEN` = `SHARED_TOKEN`) **and** a signed-in email.
+- The passcode and script URL are visible in the page source, so this is a practical gate for an
+  internal faculty tool, not strong authentication. (Email ownership isn't verified — someone who
+  knows a colleague's listed email could sign in as them. A one-time email code could be added
+  later if ever needed.)
+- Lists are cached for ~5 minutes, so a newly added email/course can take a few minutes to appear.
 
 ## Notes
 
-- The HCT logo and the course/section data are embedded in `index.html` — nothing else to upload.
-- The data was de-duplicated: fully identical rows (every field repeated) were removed.
-- Without cloud sync, data stays only in the browser it was entered in — use **Export** or
-  **Cloud sync** to collect it.
+- The HCT logo is embedded in `index.html` — nothing else to upload.
+- Sign-in and data only work on the live GitHub site; inside previews, calls to Google are blocked.
