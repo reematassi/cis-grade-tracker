@@ -362,7 +362,7 @@ $("#cards").addEventListener("click",e=>{const b=e.target.closest(".scard[data-i
 
 /* ---------- assessment entry ---------- */
 function assessOptions(row){
-  const list=(Array.isArray(row.assessments)&&row.assessments.length)?row.assessments:ASSESS_FALLBACK;
+  const list=Array.isArray(row.assessments)?row.assessments:[];
   return list.map(a=>({value:String(a),_search:String(a).toLowerCase()}));
 }
 let curRow=null, curAssess="", curRec=null;
@@ -403,7 +403,9 @@ function openEntry(row){
     </div>`;
   // assessment combo
   const inp=$("#assessInput"),pop=$("#assessPop");
-  const combo=makeCombo(inp,pop,assessOptions(row),o=>{inp.value=o.value;selectAssessment(o.value);},(o,q)=>`${hl(o.value,q)}`);
+  const opts=assessOptions(row);
+  if(!opts.length){inp.placeholder="No assessments listed for this course";inp.disabled=true;}
+  const combo=makeCombo(inp,pop,opts,o=>{inp.value=o.value;selectAssessment(o.value);},(o,q)=>`${hl(o.value,q)}`);
   inp.addEventListener("input",()=>{selectAssessment(inp.value.trim());});
   $("#e_mod").addEventListener("change",e=>{if(curRec)curRec.moderation=e.target.value;});
   renderBands();
@@ -486,13 +488,17 @@ async function saveEntry(){
   if(red&&!(curRec.justification&&curRec.justification.trim())){toast("Please add a justification for the out-of-range grades");return;}
   const btn=$("#btnSave");btn.disabled=true;btn.textContent="Saving…";
   const payload=buildSubmit();
-  try{
-    const ok=await cloudSubmit(payload);
-    if(ok){curRec.timestamp=new Date().toISOString();$("#recTs").textContent="Recorded "+formatTs(curRec.timestamp);renderCards();
-      if(red)showPopup("Thank You!","The assessment details has been sent to the APC for approval as your grades are not within the accepted grades.");
-      else showPopup("Thank you!","The submitted grades are within the accepted ranges. Please proceed and post the grades to your students. A confirmation email has been sent to you.");}
-    else toast("Saved, but the email/record could not be confirmed. Please retry.");
-  }catch(e){toast("Could not save right now. Please try again.");}
+  let ok=false;
+  try{ok=await cloudSubmit(payload);}catch(e){ok=false;}
+  if(ok){curRec.timestamp=new Date().toISOString();$("#recTs").textContent="Recorded "+formatTs(curRec.timestamp);renderCards();}
+  // Always show a pop-up describing the status after Save & notify.
+  if(ok&&red){
+    showPopup("Thank You!","The assessment details has been sent to the APC for approval as your grades are not within the accepted grades.");
+  }else if(ok){
+    showPopup("Thank you!","The submitted grades are within the accepted ranges. Please proceed and post the grades to your students. A confirmation email has been sent to you.");
+  }else{
+    showPopup("Couldn't send","We couldn't reach the server to record your entry. Please check your connection and click Save & notify again.");
+  }
   btn.textContent="Save & notify";btn.disabled=!(curAssess&&allEntered()&&!sumOver());
 }
 function buildSubmit(){
